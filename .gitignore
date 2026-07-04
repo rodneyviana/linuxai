@@ -1,0 +1,16 @@
+# Secrets: never commit the real env file
+.env
+~/.config/linuxai/.env
+
+# Build artifacts
+/linuxai
+/linuxai-amd64
+/linuxai-arm64
+*.exe
+
+# Editor / OS cruft
+.DS_Store
+*.swp
+
+# Claude Code local session state (not shared project config)
+.claude/settings.local.json*
