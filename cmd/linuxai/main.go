@@ -14,6 +14,7 @@ import (
 	"linuxai/internal/history"
 	"linuxai/internal/imageutil"
 	"linuxai/internal/llm"
+	"linuxai/internal/mdterm"
 	"linuxai/internal/searxng"
 )
 
@@ -104,11 +105,13 @@ func run() error {
 	}
 
 	client := llm.NewClient(cfg.BaseURL, cfg.APIKey)
+	renderer := mdterm.NewRenderer(os.Stdout, mdterm.ShouldColor(os.Stdout))
 	var reply strings.Builder
 	err = client.StreamChat(cfg.Model, messages, func(token string) {
-		fmt.Print(token)
+		renderer.WriteString(token)
 		reply.WriteString(token)
 	})
+	renderer.Close()
 	fmt.Println()
 	if err != nil {
 		return err

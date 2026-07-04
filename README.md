@@ -33,6 +33,7 @@ key required:
 | `internal/imageutil` | Downscaling math and that `ToDataURL` always produces a valid JPEG data URL under the size cap, even for images already narrower than the target width. |
 | `internal/llm` | The text-only vs. multimodal `Message` JSON shapes, and `StreamChat` against an `httptest` SSE server (token delivery, auth header, non-200 errors, malformed chunks). |
 | `internal/searxng` | `Search` against an `httptest` server (result capping, non-200, non-JSON content type) and `GroundingBlock` formatting. |
+| `internal/mdterm` | Streaming Markdown-to-ANSI rendering (bold, inline code, fenced blocks incl. indented ones, headers, bullets), plain-text fallback, `NO_COLOR`, and byte-by-byte vs. whole-string equivalence (guards against chunk-boundary bugs). |
 | `cmd/linuxai` | `parseArgs` (flags anywhere in argv, `/web ` prefix, missing-value errors) and `resolveThread` (`--new`/`--resume`/bare-continue/resume-of-a-missing-id). |
 
 Run just the tests with `go test ./...`, or `go test ./... -v` for
@@ -71,6 +72,14 @@ echo "what does chmod 755 mean?" | linuxai
 ```
 
 The answer streams to stdout token by token as it's generated.
+
+### Terminal formatting
+
+When stdout is a real terminal, the model's Markdown is rendered live as
+ANSI (bold, inline `code`, fenced code blocks, `#`/`##` headers, `-`/`*`
+bullets) as tokens stream in — no waiting for the full response. Piping to
+a file or another command (`linuxai ... | less`) automatically falls back
+to raw Markdown, and setting `NO_COLOR` (any value) disables it explicitly.
 
 ### Flags
 
@@ -138,9 +147,10 @@ your compositor's shortcut settings or `sxhkd`.
 ## Status
 
 Implemented: `.env` loading, config from environment, streaming chat
-against the NVIDIA/Ollama backend, JSONL history with `--new`/`--list`/
-`--resume`/`--search`, manual image attach (`--image`/`--clipboard`) with
-stdlib-only downscaling, and `--web` SearXNG grounding.
+against the NVIDIA/Ollama backend, live Markdown-to-ANSI terminal
+rendering, JSONL history with `--new`/`--list`/`--resume`/`--search`,
+manual image attach (`--image`/`--clipboard`) with stdlib-only
+downscaling, and `--web` SearXNG grounding.
 
 Not automated: the hotkey trigger (tmux/readline/desktop bindings above are
 provided as copy-paste snippets, not applied automatically).
