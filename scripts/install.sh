@@ -30,7 +30,8 @@ fi
 mkdir -p "$INSTALL_DIR"
 cp "$SCRIPT_DIR/$bin" "$INSTALL_DIR/linuxai"
 chmod +x "$INSTALL_DIR/linuxai"
-echo "Installed linuxai ($arch) to $INSTALL_DIR/linuxai"
+installed_version="$("$INSTALL_DIR/linuxai" --version 2>/dev/null || echo unknown)"
+echo "Installed $installed_version ($arch) to $INSTALL_DIR/linuxai"
 
 mkdir -p "$CONFIG_DIR"
 if [ -f "$CONFIG_DIR/.env" ]; then

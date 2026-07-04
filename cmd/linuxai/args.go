@@ -9,12 +9,13 @@ import (
 // token, joined back together as the prompt so users never need to quote
 // their question.
 type cliArgs struct {
-	New    bool
-	List   bool
-	Web    bool
-	Resume string // thread id; ResumeGiven distinguishes "" from unset
-	Search string // search term; SearchGiven distinguishes "" from unset
-	Image  string // path from --image
+	New     bool
+	List    bool
+	Web     bool
+	Version bool
+	Resume  string // thread id; ResumeGiven distinguishes "" from unset
+	Search  string // search term; SearchGiven distinguishes "" from unset
+	Image   string // path from --image
 
 	ResumeGiven bool
 	SearchGiven bool
@@ -22,9 +23,9 @@ type cliArgs struct {
 	Prompt string
 }
 
-// parseArgs recognizes --new, --list, --web, --clipboard, --resume <id>,
-// --search <term>, and --image <path> wherever they appear in args, and
-// joins every other token, in order, into the prompt.
+// parseArgs recognizes --new, --list, --web, --version, --clipboard,
+// --resume <id>, --search <term>, and --image <path> wherever they appear
+// in args, and joins every other token, in order, into the prompt.
 func parseArgs(args []string) (*cliArgs, error) {
 	a := &cliArgs{}
 	var promptParts []string
@@ -37,6 +38,8 @@ func parseArgs(args []string) (*cliArgs, error) {
 			a.List = true
 		case "--web":
 			a.Web = true
+		case "--version":
+			a.Version = true
 		case "--clipboard":
 			a.Image = "-" // sentinel: read from clipboard instead of a path
 		case "--resume":

@@ -122,6 +122,19 @@ func TestParseArgsNoWebPrefixWithoutTrailingSpace(t *testing.T) {
 	}
 }
 
+func TestParseArgsVersion(t *testing.T) {
+	a, err := parseArgs([]string{"--version"})
+	if err != nil {
+		t.Fatalf("parseArgs: %v", err)
+	}
+	if !a.Version {
+		t.Error("expected --version to be recognized")
+	}
+	if a.Prompt != "" {
+		t.Errorf("Prompt = %q, want empty", a.Prompt)
+	}
+}
+
 func TestParseArgsEmpty(t *testing.T) {
 	a, err := parseArgs(nil)
 	if err != nil {

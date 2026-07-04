@@ -21,26 +21,44 @@ Run `./test-all.sh` before committing. It runs `gofmt -l .`, `go vet ./...`,
 `go test ./...`, and a static cross-compile for both amd64 and arm64,
 failing on the first problem it finds.
 
+## Versioning
+
+`linuxai --version` prints the build's version, derived from
+`git describe --tags --always --dirty` at build time (e.g. `v0.2.0`, or
+`v0.2.0-3-gabc1234` for commits since the last tag, or a bare commit hash
+like `07fe69e` before any tag exists). A plain `go build` with no
+`-ldflags` reports `dev`.
+
+To cut a release, tag it and rebuild/repackage:
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+./scripts/package.sh
+```
+
 ## Install (self-extracting installer)
 
 If [`makeself`](https://makeself.io/) is installed, `scripts/package.sh`
-builds both architectures and bundles them into a single self-extracting
-installer:
+computes the version, cross-compiles both architectures with it baked in
+via `-ldflags`, and bundles everything into a single self-extracting
+installer named after that version:
 
 ```bash
-./scripts/package.sh                # writes ./linuxai-installer.run
+./scripts/package.sh                # writes ./linuxai-installer-<version>.run
 ```
 
 Run the installer on the target box (`scp` it over for remote installs):
 
 ```bash
-./linuxai-installer.run
+./linuxai-installer-<version>.run
 ```
 
 It detects the machine's architecture (`uname -m`) and:
 
 - installs the matching binary to `~/.local/bin/linuxai` (no sudo needed;
-  warns if `~/.local/bin` isn't on your `PATH`)
+  warns if `~/.local/bin` isn't on your `PATH`) and prints the version
+  it just installed
 - creates `~/.config/linuxai/.env` from the template, but never overwrites
   an existing one
 - prints a reminder to fill in `NVIDIA_API_KEY` before first use
@@ -61,7 +79,7 @@ key required:
 | `internal/llm` | The text-only vs. multimodal `Message` JSON shapes, and `StreamChat` against an `httptest` SSE server (token delivery, auth header, non-200 errors, malformed chunks). |
 | `internal/searxng` | `Search` against an `httptest` server (result capping, non-200, non-JSON content type) and `GroundingBlock` formatting. |
 | `internal/mdterm` | Streaming Markdown-to-ANSI rendering (bold, inline code, fenced blocks incl. indented ones, headers, bullets), plain-text fallback, `NO_COLOR`, and byte-by-byte vs. whole-string equivalence (guards against chunk-boundary bugs). |
-| `cmd/linuxai` | `parseArgs` (flags anywhere in argv, `/web ` prefix, missing-value errors) and `resolveThread` (`--new`/`--resume`/bare-continue/resume-of-a-missing-id). |
+| `cmd/linuxai` | `parseArgs` (flags anywhere in argv, `/web ` prefix, `--version`, missing-value errors) and `resolveThread` (`--new`/`--resume`/bare-continue/resume-of-a-missing-id). |
 
 Run just the tests with `go test ./...`, or `go test ./... -v` for
 per-test output.
@@ -127,6 +145,7 @@ together, in order, as the prompt.
 | `--web` | Ground the answer with top results from your SearXNG instance. Equivalent to starting the prompt with `/web `. |
 | `--image <path>` | Attach an image file (downscaled, sent as `image_url` content). |
 | `--clipboard` | Attach whatever image is on the local clipboard (`xclip`/`wl-paste`; requires `$DISPLAY` or `$WAYLAND_DISPLAY`, so it only works locally, not over plain SSH). |
+| `--version` | Print the build's version and exit. No LLM call. |
 
 Examples:
 

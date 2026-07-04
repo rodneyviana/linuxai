@@ -22,6 +22,11 @@ import (
 // context on each turn (rough estimate: content length / 4).
 const replayBudgetTokens = 6000
 
+// version is set at build time via -ldflags "-X main.version=...", normally
+// from `git describe --tags --always --dirty` (see scripts/package.sh).
+// Left as "dev" for a plain `go build` with no ldflags.
+var version = "dev"
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "linuxai: "+err.Error())
@@ -37,6 +42,11 @@ func run() error {
 	args, err := parseArgs(os.Args[1:])
 	if err != nil {
 		return err
+	}
+
+	if args.Version {
+		fmt.Println("linuxai " + version)
+		return nil
 	}
 
 	store, err := history.NewStore()
