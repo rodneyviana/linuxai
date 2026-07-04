@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMessageMarshalJSONTextOnly(t *testing.T) {
@@ -139,6 +140,49 @@ func TestStreamChatReturnsErrorOnNonOKStatus(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid api key") {
 		t.Errorf("error = %v, want it to include the response body", err)
+	}
+}
+
+func TestStreamChatIdleTimeoutOnStall(t *testing.T) {
+	// Reproduces an observed real-world failure: NVIDIA's free-tier
+	// endpoint sending one token, then going silent forever with no
+	// [DONE] and no connection close. Without a bound, StreamChat would
+	// hang indefinitely.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		payload, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"delta": map[string]string{"content": "To"}},
+			},
+		})
+		w.Write([]byte("data: " + string(payload) + "\n\n"))
+		w.(http.Flusher).Flush()
+		<-r.Context().Done() // go silent until the client disconnects
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "key")
+	client.IdleTimeout = 100 * time.Millisecond
+
+	var got strings.Builder
+	start := time.Now()
+	err := client.StreamChat("m", []Message{{Role: "user", Content: "hi"}}, func(tok string) {
+		got.WriteString(tok)
+	})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected a stall error, got nil")
+	}
+	if !strings.Contains(err.Error(), "stalled") {
+		t.Errorf("error = %v, want it to mention the stream stalled", err)
+	}
+	if got.String() != "To" {
+		t.Errorf("streamed text = %q, want %q (the token received before the stall)", got.String(), "To")
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("took %s, want it bounded by the short IdleTimeout instead of hanging", elapsed)
 	}
 }
 

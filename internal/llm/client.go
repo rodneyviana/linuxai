@@ -5,25 +5,37 @@ package llm
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 )
+
+// defaultIdleTimeout bounds how long StreamChat will wait for the *next*
+// chunk once a stream is under way. NVIDIA's free-tier endpoint has been
+// observed to emit one token and then go silent for 25+ seconds with no
+// [DONE] and no connection close, which would otherwise hang forever.
+const defaultIdleTimeout = 45 * time.Second
 
 // Client talks to an OpenAI-compatible chat completions endpoint.
 type Client struct {
 	BaseURL string
 	APIKey  string
 	HTTP    *http.Client
+	// IdleTimeout bounds the gap between consecutive stream chunks (reset
+	// on every line received). Zero means defaultIdleTimeout.
+	IdleTimeout time.Duration
 }
 
 // NewClient builds a Client that times out if the server never starts
-// responding, but never cuts off an in-progress stream: http.Client.Timeout
-// bounds the whole request including body reads, so it is deliberately left
-// unset here in favor of a transport-level ResponseHeaderTimeout.
+// responding, but never cuts off an in-progress stream on total duration:
+// http.Client.Timeout bounds the whole request including body reads, so it
+// is deliberately left unset here in favor of a transport-level
+// ResponseHeaderTimeout plus StreamChat's own idle-timeout watchdog.
 func NewClient(baseURL, apiKey string) *Client {
 	return &Client{
 		BaseURL: strings.TrimRight(baseURL, "/"),
@@ -33,6 +45,7 @@ func NewClient(baseURL, apiKey string) *Client {
 				ResponseHeaderTimeout: 30 * time.Second,
 			},
 		},
+		IdleTimeout: defaultIdleTimeout,
 	}
 }
 
@@ -101,7 +114,10 @@ func (c *Client) StreamChat(model string, messages []Message, onToken func(strin
 		return fmt.Errorf("marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, c.BaseURL+"/chat/completions", bytes.NewReader(body))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}
@@ -122,9 +138,25 @@ func (c *Client) StreamChat(model string, messages []Message, onToken func(strin
 		return fmt.Errorf("backend returned %s: %s", resp.Status, strings.TrimSpace(string(msg)))
 	}
 
+	idleTimeout := c.IdleTimeout
+	if idleTimeout <= 0 {
+		idleTimeout = defaultIdleTimeout
+	}
+	var stalled atomic.Bool
+	watchdog := time.AfterFunc(idleTimeout, func() {
+		stalled.Store(true)
+		// Canceling the request context (rather than only closing the
+		// body) reliably aborts an in-flight read for both HTTP/1.1 and
+		// HTTP/2, where a bare Body.Close() from another goroutine isn't
+		// always guaranteed to unblock a pending Read promptly.
+		cancel()
+	})
+	defer watchdog.Stop()
+
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
+		watchdog.Reset(idleTimeout)
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data:") {
 			continue
@@ -146,6 +178,9 @@ func (c *Client) StreamChat(model string, messages []Message, onToken func(strin
 				onToken(choice.Delta.Content)
 			}
 		}
+	}
+	if stalled.Load() {
+		return fmt.Errorf("stream stalled: no data received for %s", idleTimeout)
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("reading stream: %w", err)

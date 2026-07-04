@@ -73,6 +73,11 @@ echo "what does chmod 755 mean?" | linuxai
 
 The answer streams to stdout token by token as it's generated.
 
+NVIDIA's free-tier endpoint occasionally stalls mid-stream (emits a token,
+then goes silent with no `[DONE]` and no close). If no new data arrives
+for 45 seconds, linuxai aborts with `stream stalled: no data received for
+45s` instead of hanging forever.
+
 ### Terminal formatting
 
 When stdout is a real terminal, the model's Markdown is rendered live as
