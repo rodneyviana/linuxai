@@ -21,6 +21,33 @@ Run `./test-all.sh` before committing. It runs `gofmt -l .`, `go vet ./...`,
 `go test ./...`, and a static cross-compile for both amd64 and arm64,
 failing on the first problem it finds.
 
+## Install (self-extracting installer)
+
+If [`makeself`](https://makeself.io/) is installed, `scripts/package.sh`
+builds both architectures and bundles them into a single self-extracting
+installer:
+
+```bash
+./scripts/package.sh                # writes ./linuxai-installer.run
+```
+
+Run the installer on the target box (`scp` it over for remote installs):
+
+```bash
+./linuxai-installer.run
+```
+
+It detects the machine's architecture (`uname -m`) and:
+
+- installs the matching binary to `~/.local/bin/linuxai` (no sudo needed;
+  warns if `~/.local/bin` isn't on your `PATH`)
+- creates `~/.config/linuxai/.env` from the template, but never overwrites
+  an existing one
+- prints a reminder to fill in `NVIDIA_API_KEY` before first use
+
+`scripts/install.sh` is the script makeself runs after extraction, in case
+you want to read or adapt it directly instead of going through `.run`.
+
 ## Tests
 
 Every package has real unit tests (`go test ./...`), no network or live API
