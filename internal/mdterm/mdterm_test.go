@@ -47,11 +47,33 @@ func TestBold(t *testing.T) {
 	}
 }
 
+func TestItalic(t *testing.T) {
+	input := "this is *italic* text"
+	want := "this is " + ansiItalicOn + "italic" + ansiItalicOff + " text"
+	if got := renderAll(t, input); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if got := renderByteByByte(t, input); got != want {
+		t.Errorf("byte-by-byte = %q, want %q", got, want)
+	}
+}
+
 func TestInlineCode(t *testing.T) {
 	got := renderAll(t, "run `ls -la` now")
 	want := "run " + ansiCodeOn + "ls -la" + ansiCodeOff + " now"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestMarkdownMarkersInsideCodeAndGlobAreLiteral(t *testing.T) {
+	input := "run `locate *.log && echo **done**`; glob *.txt"
+	want := "run " + ansiCodeOn + "locate *.log && echo **done**" + ansiCodeOff + "; glob *.txt"
+	if got := renderAll(t, input); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if got := renderByteByByte(t, input); got != want {
+		t.Errorf("byte-by-byte = %q, want %q", got, want)
 	}
 }
 
@@ -76,6 +98,17 @@ func TestHeaderLevelTwo(t *testing.T) {
 	want := ansiHeaderOn + "Subtitle" + ansiHeaderOff + "\n"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestFormattedHeaderAtStreamEnd(t *testing.T) {
+	input := "## **Bold** and *italic*"
+	want := ansiHeaderOn + ansiBoldOn + "Bold" + ansiBoldOff + ansiBoldOn + " and " + ansiItalicOn + "italic" + ansiItalicOff + ansiHeaderOff
+	if got := renderAll(t, input); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if got := renderByteByByte(t, input); got != want {
+		t.Errorf("byte-by-byte = %q, want %q", got, want)
 	}
 }
 
@@ -113,6 +146,67 @@ func TestPlainTextPassesThroughUnchanged(t *testing.T) {
 	input := "just a normal sentence with no markdown at all."
 	if got := renderAll(t, input); got != input {
 		t.Errorf("got %q, want unchanged %q", got, input)
+	}
+}
+
+func TestUTF8PassesThroughAcrossChunkBoundaries(t *testing.T) {
+	input := "the file’s ‘real’ path — café"
+	if got := renderAll(t, input); got != input {
+		t.Errorf("whole-string = %q, want %q", got, input)
+	}
+	if got := renderByteByByte(t, input); got != input {
+		t.Errorf("byte-by-byte = %q, want %q", got, input)
+	}
+}
+
+func TestTable(t *testing.T) {
+	input := "| What you want | Command |\n" +
+		"|----------------|---------|\n" +
+		"| Find a file by name (recursively) | find / -name \"myfile.txt\" 2>/dev/null |\n" +
+		"| Quick DB lookup | locate myfile.txt |\n"
+	want := ansiTableOn + "┌" + strings.Repeat("─", 35) + "┬" + strings.Repeat("─", 39) + "┐" + ansiTableOff + "\n" +
+		ansiTableOn + "│" + ansiTableOff + " " + ansiBoldOn + "What you want" + strings.Repeat(" ", 20) + ansiBoldOff + " " + ansiTableOn + "│" + ansiTableOff + " " + ansiBoldOn + "Command" + strings.Repeat(" ", 30) + ansiBoldOff + " " + ansiTableOn + "│" + ansiTableOff + "\n" +
+		ansiTableOn + "├" + strings.Repeat("─", 35) + "┼" + strings.Repeat("─", 39) + "┤" + ansiTableOff + "\n" +
+		ansiTableOn + "│" + ansiTableOff + " Find a file by name (recursively) " + ansiTableOn + "│" + ansiTableOff + " find / -name \"myfile.txt\" 2>/dev/null " + ansiTableOn + "│" + ansiTableOff + "\n" +
+		ansiTableOn + "│" + ansiTableOff + " Quick DB lookup" + strings.Repeat(" ", 19) + ansiTableOn + "│" + ansiTableOff + " locate myfile.txt" + strings.Repeat(" ", 21) + ansiTableOn + "│" + ansiTableOff + "\n" +
+		ansiTableOn + "└" + strings.Repeat("─", 35) + "┴" + strings.Repeat("─", 39) + "┘" + ansiTableOff + "\n"
+	if got := renderAll(t, input); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if got := renderByteByByte(t, input); got != want {
+		t.Errorf("byte-by-byte = %q, want %q", got, want)
+	}
+}
+
+func TestTableWithoutTrailingNewline(t *testing.T) {
+	input := "| Name | Value |\n|---|---:|\n| café | 42 |"
+	whole := renderAll(t, input)
+	perByte := renderByteByByte(t, input)
+	if whole != perByte || !strings.Contains(whole, "café") {
+		t.Errorf("whole-string = %q, byte-by-byte = %q", whole, perByte)
+	}
+}
+
+func TestFormattedTableCellsAndCodeSpanPipe(t *testing.T) {
+	input := "| Platform | Example |\n" +
+		"|---|---|\n" +
+		"| **Linux / macOS** | `Get-ChildItem | Select-String 'error'` |\n" +
+		"| *Cross-platform* | `locate *.log` |\n"
+	got := renderAll(t, input)
+	if perByte := renderByteByByte(t, input); perByte != got {
+		t.Errorf("whole-string = %q, byte-by-byte = %q", got, perByte)
+	}
+	if !strings.Contains(got, ansiBoldOn+"Linux / macOS"+ansiBoldOff) {
+		t.Errorf("bold table cell was not formatted: %q", got)
+	}
+	if !strings.Contains(got, ansiItalicOn+"Cross-platform"+ansiItalicOff) {
+		t.Errorf("italic table cell was not formatted: %q", got)
+	}
+	if !strings.Contains(got, ansiCodeOn+"Get-ChildItem | Select-String 'error'"+ansiCodeOff) {
+		t.Errorf("code span containing a pipe was split or not formatted: %q", got)
+	}
+	if !strings.Contains(got, ansiCodeOn+"locate *.log"+ansiCodeOff) {
+		t.Errorf("asterisk inside code span was treated as Markdown: %q", got)
 	}
 }
 

@@ -1,19 +1,25 @@
 // Package mdterm incrementally renders a subset of Markdown as ANSI escape
 // sequences suitable for a terminal, without buffering the whole response
 // (so token-by-token streaming still feels live). It understands
-// **bold**, `inline code`, fenced ```code blocks```, ATX #/## headers, and
-// "- "/"* " bullet lists; anything else passes through unchanged.
+// **bold**, *italic*, `inline code`, fenced ```code blocks```, ATX headers,
+// "- "/"* " bullet lists, and pipe tables; anything else passes through
+// unchanged.
 package mdterm
 
 import (
 	"bytes"
 	"io"
 	"os"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
 	ansiBoldOn    = "\x1b[1m"
 	ansiBoldOff   = "\x1b[22m"
+	ansiItalicOn  = "\x1b[3m"
+	ansiItalicOff = "\x1b[23m"
 	ansiCodeOn    = "\x1b[33m"
 	ansiCodeOff   = "\x1b[39m"
 	ansiFenceOn   = "\x1b[36m"
@@ -22,6 +28,8 @@ const (
 	ansiHeaderOff = "\x1b[22;24m"
 	ansiBulletOn  = "\x1b[34m"
 	ansiBulletOff = "\x1b[39m"
+	ansiTableOn   = "\x1b[34m"
+	ansiTableOff  = "\x1b[39m"
 	ansiReset     = "\x1b[0m"
 )
 
@@ -39,6 +47,7 @@ type Renderer struct {
 	buf       []byte
 	lineStart bool
 	inBold    bool
+	inItalic  bool
 	inCode    bool
 	inFence   bool
 }
@@ -94,7 +103,7 @@ func (r *Renderer) Close() error {
 			r.buf = nil
 		}
 		if len(r.buf) > 0 {
-			if _, err := io.WriteString(r.w, string(r.buf)); err != nil {
+			if _, err := r.w.Write(r.buf); err != nil {
 				return err
 			}
 			r.buf = nil
@@ -106,14 +115,30 @@ func (r *Renderer) Close() error {
 		return nil
 	}
 
+	if r.lineStart && len(r.buf) > 0 && r.buf[0] == '|' {
+		if consumed, out, matched, _ := matchTable(r.buf, true); matched {
+			if _, err := io.WriteString(r.w, out); err != nil {
+				return err
+			}
+			r.buf = r.buf[consumed:]
+		}
+	}
+	if r.lineStart && len(r.buf) > 0 && r.buf[0] == '#' {
+		if consumed, out, matched := matchHeader(r.buf, true); matched {
+			if _, err := io.WriteString(r.w, out); err != nil {
+				return err
+			}
+			r.buf = r.buf[consumed:]
+		}
+	}
 	if len(r.buf) > 0 {
-		if _, err := io.WriteString(r.w, string(r.buf)); err != nil {
+		if _, err := r.w.Write(r.buf); err != nil {
 			return err
 		}
 		r.buf = nil
 	}
-	if r.inBold || r.inCode {
-		r.inBold, r.inCode = false, false
+	if r.inBold || r.inItalic || r.inCode {
+		r.inBold, r.inItalic, r.inCode = false, false, false
 		if _, err := io.WriteString(r.w, ansiReset); err != nil {
 			return err
 		}
@@ -149,6 +174,18 @@ func (r *Renderer) step() (consumed int, out string, needMore bool) {
 	if r.inFence {
 		return r.stepFenceBody(buf)
 	}
+	if r.inCode && buf[0] != '`' {
+		if buf[0] == '\n' {
+			r.lineStart = true
+			return 1, "\n", false
+		}
+		if !utf8.FullRune(buf) {
+			return 0, "", true
+		}
+		_, size := utf8.DecodeRune(buf)
+		r.lineStart = false
+		return size, string(buf[:size]), false
+	}
 
 	if r.lineStart {
 		if consumed, out, matched, needMore := matchFenceOpen(buf); needMore {
@@ -158,22 +195,22 @@ func (r *Renderer) step() (consumed int, out string, needMore bool) {
 			r.lineStart = true
 			return consumed, out, false
 		}
+		if buf[0] == '|' {
+			if consumed, out, matched, needMore := matchTable(buf, false); needMore {
+				return 0, "", true
+			} else if matched {
+				r.lineStart = true
+				return consumed, out, false
+			}
+		}
 
 		switch buf[0] {
 		case '#':
-			n, complete := leadingRun(buf, '#')
-			if !complete && n <= 6 {
-				return 0, "", true
-			}
-			if n >= 1 && n <= 6 && complete && buf[n] == ' ' {
-				rest := buf[n+1:]
-				nl := bytes.IndexByte(rest, '\n')
-				if nl == -1 {
-					return 0, "", true
-				}
-				text := string(rest[:nl])
+			if consumed, out, matched := matchHeader(buf, false); matched {
 				r.lineStart = true
-				return n + 1 + nl + 1, ansiHeaderOn + text + ansiHeaderOff + "\n", false
+				return consumed, out, false
+			} else if consumed == 0 {
+				return 0, "", true
 			}
 
 		case '-', '*', '+':
@@ -198,6 +235,25 @@ func (r *Renderer) step() (consumed int, out string, needMore bool) {
 	if len(buf) == 1 && buf[0] == '*' {
 		return 0, "", true
 	}
+	if buf[0] == '*' {
+		if !r.inItalic && len(buf) >= 2 && (buf[1] == ' ' || buf[1] == '\t' || buf[1] == '\n') {
+			r.lineStart = false
+			return 1, "*", false
+		}
+		if !r.inItalic {
+			next, _ := utf8.DecodeRune(buf[1:])
+			if !unicode.IsLetter(next) && !unicode.IsNumber(next) {
+				r.lineStart = false
+				return 1, "*", false
+			}
+		}
+		r.inItalic = !r.inItalic
+		r.lineStart = false
+		if r.inItalic {
+			return 1, ansiItalicOn, false
+		}
+		return 1, ansiItalicOff, false
+	}
 
 	if buf[0] == '`' {
 		r.inCode = !r.inCode
@@ -213,8 +269,272 @@ func (r *Renderer) step() (consumed int, out string, needMore bool) {
 		return 1, "\n", false
 	}
 
+	if !utf8.FullRune(buf) {
+		return 0, "", true
+	}
+	_, size := utf8.DecodeRune(buf)
 	r.lineStart = false
-	return 1, string(buf[0]), false
+	return size, string(buf[:size]), false
+}
+
+func matchHeader(buf []byte, final bool) (consumed int, out string, matched bool) {
+	n, complete := leadingRun(buf, '#')
+	if !complete && n <= 6 {
+		return 0, "", false
+	}
+	if n < 1 || n > 6 || !complete || buf[n] != ' ' {
+		return 1, "", false
+	}
+	rest := buf[n+1:]
+	newline := bytes.IndexByte(rest, '\n')
+	if newline < 0 && !final {
+		return 0, "", false
+	}
+	if newline < 0 {
+		newline = len(rest)
+		consumed = len(buf)
+	} else {
+		consumed = n + 1 + newline + 1
+	}
+	text, _ := renderInline(string(rest[:newline]), true)
+	suffix := "\n"
+	if final && consumed == len(buf) {
+		suffix = ""
+	}
+	return consumed, ansiHeaderOn + text + ansiHeaderOff + suffix, true
+}
+
+func matchTable(buf []byte, final bool) (consumed int, out string, matched, needMore bool) {
+	headerLine, next, complete := tableLine(buf, 0, final)
+	if !complete {
+		return 0, "", false, true
+	}
+	header, ok := parseTableRow(headerLine)
+	if !ok {
+		return 0, "", false, false
+	}
+
+	separatorLine, next, complete := tableLine(buf, next, final)
+	if !complete {
+		return 0, "", false, true
+	}
+	separator, ok := parseTableRow(separatorLine)
+	if !ok || len(separator) != len(header) || !isTableSeparator(separator) {
+		return 0, "", false, false
+	}
+
+	rows := [][]string{header}
+	position := next
+	for position < len(buf) {
+		if buf[position] != '|' {
+			break
+		}
+		line, lineEnd, complete := tableLine(buf, position, final)
+		if !complete {
+			return 0, "", false, true
+		}
+		row, ok := parseTableRow(line)
+		if !ok {
+			break
+		}
+		rows = append(rows, row)
+		position = lineEnd
+	}
+	if !final && position == len(buf) {
+		return 0, "", false, true
+	}
+
+	return position, renderTable(rows), true, false
+}
+
+func tableLine(buf []byte, start int, final bool) (line []byte, next int, complete bool) {
+	if start >= len(buf) {
+		return nil, start, false
+	}
+	if newline := bytes.IndexByte(buf[start:], '\n'); newline >= 0 {
+		end := start + newline
+		return buf[start:end], end + 1, true
+	}
+	if final {
+		return buf[start:], len(buf), true
+	}
+	return nil, start, false
+}
+
+func parseTableRow(line []byte) ([]string, bool) {
+	trimmed := strings.TrimSpace(string(line))
+	if len(trimmed) < 2 || trimmed[0] != '|' || trimmed[len(trimmed)-1] != '|' {
+		return nil, false
+	}
+	var parts []string
+	var cell strings.Builder
+	inCode := false
+	escaped := false
+	for _, char := range trimmed[1 : len(trimmed)-1] {
+		switch {
+		case escaped:
+			cell.WriteRune(char)
+			escaped = false
+		case char == '\\':
+			escaped = true
+			cell.WriteRune(char)
+		case char == '`':
+			inCode = !inCode
+			cell.WriteRune(char)
+		case char == '|' && !inCode:
+			parts = append(parts, strings.TrimSpace(cell.String()))
+			cell.Reset()
+		default:
+			cell.WriteRune(char)
+		}
+	}
+	parts = append(parts, strings.TrimSpace(cell.String()))
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	return parts, len(parts) > 0
+}
+
+func isTableSeparator(cells []string) bool {
+	for _, cell := range cells {
+		cell = strings.TrimPrefix(cell, ":")
+		cell = strings.TrimSuffix(cell, ":")
+		if len(cell) < 3 || strings.Trim(cell, "-") != "" {
+			return false
+		}
+	}
+	return true
+}
+
+func renderTable(rows [][]string) string {
+	columns := len(rows[0])
+	widths := make([]int, columns)
+	for _, row := range rows {
+		for column := 0; column < columns && column < len(row); column++ {
+			_, width := renderInline(row[column], false)
+			if width > widths[column] {
+				widths[column] = width
+			}
+		}
+	}
+
+	var out strings.Builder
+	writeTableBorder(&out, "┌", "┬", "┐", widths)
+	writeTableRow(&out, rows[0], widths, true)
+	writeTableBorder(&out, "├", "┼", "┤", widths)
+	for _, row := range rows[1:] {
+		writeTableRow(&out, row, widths, false)
+	}
+	writeTableBorder(&out, "└", "┴", "┘", widths)
+	return out.String()
+}
+
+func writeTableBorder(out *strings.Builder, left, middle, right string, widths []int) {
+	out.WriteString(ansiTableOn)
+	out.WriteString(left)
+	for column, width := range widths {
+		out.WriteString(strings.Repeat("─", width+2))
+		if column < len(widths)-1 {
+			out.WriteString(middle)
+		}
+	}
+	out.WriteString(right)
+	out.WriteString(ansiTableOff)
+	out.WriteByte('\n')
+}
+
+func writeTableRow(out *strings.Builder, row []string, widths []int, header bool) {
+	out.WriteString(ansiTableOn + "│" + ansiTableOff)
+	for column, width := range widths {
+		cell := ""
+		if column < len(row) {
+			cell = row[column]
+		}
+		out.WriteByte(' ')
+		if header {
+			out.WriteString(ansiBoldOn)
+		}
+		formatted, visibleWidth := renderInline(cell, header)
+		out.WriteString(formatted)
+		out.WriteString(strings.Repeat(" ", width-visibleWidth))
+		if header {
+			out.WriteString(ansiBoldOff)
+		}
+		out.WriteString(" " + ansiTableOn + "│" + ansiTableOff)
+	}
+	out.WriteByte('\n')
+}
+
+func renderInline(text string, baseBold bool) (string, int) {
+	var out strings.Builder
+	visibleWidth := 0
+	inBold := false
+	inItalic := false
+	inCode := false
+	for position := 0; position < len(text); {
+		if inCode && text[position] != '`' {
+			_, size := utf8.DecodeRuneInString(text[position:])
+			out.WriteString(text[position : position+size])
+			visibleWidth++
+			position += size
+			continue
+		}
+		switch {
+		case strings.HasPrefix(text[position:], "**") && (inBold || strings.Contains(text[position+2:], "**")):
+			inBold = !inBold
+			if inBold {
+				out.WriteString(ansiBoldOn)
+			} else {
+				out.WriteString(ansiBoldOff)
+				if baseBold {
+					out.WriteString(ansiBoldOn)
+				}
+			}
+			position += 2
+		case text[position] == '*' && (inItalic || hasItalicClose(text[position+1:])):
+			inItalic = !inItalic
+			if inItalic {
+				out.WriteString(ansiItalicOn)
+			} else {
+				out.WriteString(ansiItalicOff)
+			}
+			position++
+		case text[position] == '`' && (inCode || strings.ContainsRune(text[position+1:], '`')):
+			inCode = !inCode
+			if inCode {
+				out.WriteString(ansiCodeOn)
+			} else {
+				out.WriteString(ansiCodeOff)
+			}
+			position++
+		case text[position] == '\\' && position+1 < len(text):
+			_, size := utf8.DecodeRuneInString(text[position+1:])
+			out.WriteString(text[position+1 : position+1+size])
+			visibleWidth++
+			position += 1 + size
+		default:
+			_, size := utf8.DecodeRuneInString(text[position:])
+			out.WriteString(text[position : position+size])
+			visibleWidth++
+			position += size
+		}
+	}
+	if inBold || inItalic || inCode {
+		out.WriteString(ansiReset)
+		if baseBold {
+			out.WriteString(ansiBoldOn)
+		}
+	}
+	return out.String(), visibleWidth
+}
+
+func hasItalicClose(text string) bool {
+	for position := 0; position < len(text); position++ {
+		if text[position] == '*' && (position+1 >= len(text) || text[position+1] != '*') {
+			return true
+		}
+	}
+	return false
 }
 
 // matchFenceOpen tries to match up to maxFenceIndent leading spaces
