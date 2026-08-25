@@ -120,6 +120,16 @@ func (s *Store) ThreadExists(id string) bool {
 	return err == nil
 }
 
+// ThreadModified returns the last activity time for a thread. Appending any
+// message updates the thread file's modification time.
+func (s *Store) ThreadModified(id string) (time.Time, error) {
+	info, err := os.Stat(s.threadPath(id))
+	if err != nil {
+		return time.Time{}, fmt.Errorf("checking thread %q: %w", id, err)
+	}
+	return info.ModTime(), nil
+}
+
 // Append writes one message to the end of a thread's JSONL file.
 func (s *Store) Append(id string, msg Message) error {
 	if msg.TS == 0 {

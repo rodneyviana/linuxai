@@ -66,6 +66,98 @@ func TestInlineCode(t *testing.T) {
 	}
 }
 
+func TestLatexMath(t *testing.T) {
+	input := "Euler: $e^{i\\pi} + 1 = 0$\n$$\\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$$"
+	want := "Euler: " + ansiMathOn + "e^(iπ) + 1 = 0" + ansiMathOff + "\n" +
+		ansiMathOn + "(-b ± √(b² - 4ac))⁄(2a)" + ansiMathOff
+	if got := renderAll(t, input); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if got := renderByteByByte(t, input); got != want {
+		t.Errorf("byte-by-byte = %q, want %q", got, want)
+	}
+}
+
+func TestLatexParenthesisAndBracketDelimiters(t *testing.T) {
+	input := "The equation \\(ax^2+bx+c=0\\) has roots\n\\[x=\\frac{-b\\pm\\sqrt{b^2-4ac}}{2a}\\]"
+	want := "The equation " + ansiMathOn + "ax²+bx+c=0" + ansiMathOff + " has roots\n" +
+		ansiMathOn + "x=(-b±√(b²-4ac))⁄(2a)" + ansiMathOff
+	if got := renderAll(t, input); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if got := renderByteByByte(t, input); got != want {
+		t.Errorf("byte-by-byte = %q, want %q", got, want)
+	}
+}
+
+func TestLatexSpacingCommands(t *testing.T) {
+	input := `$x=\frac{-\,b\;\pm\;\sqrt{D}}{2a}\qquad D=b^2-4ac$`
+	want := ansiMathOn + "x=(- b ± √D)⁄(2a)  D=b²-4ac" + ansiMathOff
+	if got := renderAll(t, input); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestLatexSymbolsSetsAndScriptFallback(t *testing.T) {
+	input := `$\alpha \in \mathbb{R}, x_1^2 \le \infty, y^{word}$`
+	want := ansiMathOn + `α ∈ ℝ, x₁² ≤ ∞, y^(word)` + ansiMathOff
+	if got := renderAll(t, input); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestLatexUnknownCommandRemainsReadable(t *testing.T) {
+	input := `$x \mystery{y}$`
+	want := ansiMathOn + `x \mysteryy` + ansiMathOff
+	if got := renderAll(t, input); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestShellVariableAndUnterminatedMathAreLiteral(t *testing.T) {
+	inputs := []string{
+		"echo $PATH\nnext",
+		"price is $5",
+		"prices are $5 and $10",
+		"unfinished $x + 1",
+	}
+	for _, input := range inputs {
+		if got := renderAll(t, input); got != input {
+			t.Errorf("input %q rendered as %q", input, got)
+		}
+		if got := renderByteByByte(t, input); got != input {
+			t.Errorf("input %q byte-by-byte rendered as %q", input, got)
+		}
+	}
+}
+
+func TestLatexInsideCodeIsLiteral(t *testing.T) {
+	input := "`$x^2$`\n```tex\n$$\\frac{a}{b}$$\n```"
+	want := ansiCodeOn + "$x^2$" + ansiCodeOff + "\n" + ansiFenceOn + "$$\\frac{a}{b}$$\n" + ansiFenceOff
+	if got := renderAll(t, input); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if got := renderByteByByte(t, input); got != want {
+		t.Errorf("byte-by-byte = %q, want %q", got, want)
+	}
+}
+
+func TestLatexInHeaderAndTable(t *testing.T) {
+	header := renderAll(t, "# Energy $E=mc^2$\n")
+	if !strings.Contains(header, ansiMathOn+"E=mc²"+ansiMathOff) {
+		t.Errorf("header math was not formatted: %q", header)
+	}
+
+	input := "| Formula | Meaning |\n|---|---|\n| $x^2$ | square |\n| \\(\\{x | x > 0\\}\\) | positive |\n"
+	got := renderAll(t, input)
+	if perByte := renderByteByByte(t, input); perByte != got {
+		t.Errorf("whole-string = %q, byte-by-byte = %q", got, perByte)
+	}
+	if !strings.Contains(got, ansiMathOn+"x²"+ansiMathOff) || !strings.Contains(got, ansiMathOn+"{x | x > 0}"+ansiMathOff) {
+		t.Errorf("table math was not formatted: %q", got)
+	}
+}
+
 func TestMarkdownMarkersInsideCodeAndGlobAreLiteral(t *testing.T) {
 	input := "run `locate *.log && echo **done**`; glob *.txt"
 	want := "run " + ansiCodeOn + "locate *.log && echo **done**" + ansiCodeOff + "; glob *.txt"
@@ -220,7 +312,7 @@ func TestLoneAsteriskIsLiteral(t *testing.T) {
 func TestDisabledRendererPassesThroughRaw(t *testing.T) {
 	var buf bytes.Buffer
 	r := NewRenderer(&buf, false)
-	input := "**bold** and `code`"
+	input := "**bold**, `code`, and $\\frac{a}{b}$"
 	if _, err := r.WriteString(input); err != nil {
 		t.Fatalf("WriteString: %v", err)
 	}

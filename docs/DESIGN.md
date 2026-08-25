@@ -15,8 +15,9 @@ attached manually, not auto-captured.
 
 - Compiles to a single statically linked binary with zero runtime
   dependencies. `scp` it to any box (workstation, 8xP40 server, Jetson) and run.
-- Everything the client needs is in the standard library: `net/http` (HTTPS with
-  TLS built in), `encoding/json`, `encoding/base64`. No third-party packages.
+- Core protocol and data handling use the standard library. Pure-Go UI
+  packages are allowed when they preserve static single-binary delivery and
+  introduce no runtime dependency.
 - Cross-compiles trivially to amd64 and arm64 from one machine.
 - Fast startup, which matters for a hotkey popup.
 
@@ -100,8 +101,9 @@ with an instruction to use and cite the sources.
   `~/.local/share/linuxai/chats/<id>.jsonl`, one message per line:
   `{ "role": ..., "content": ..., "image": ..., "ts": ... }`.
 - A `current` pointer file (`~/.local/share/linuxai/current`) names the active
-  thread. Bare invocation continues it; `--new` starts a fresh one and
-  repoints.
+  thread. Implicit invocations continue it for five minutes after its latest
+  activity, then create a fresh thread. `--new` always starts a fresh one and
+  `--resume` always selects the requested thread.
 - Commands: `--list` (title = first user message), `--resume <id>`,
   `--search <term>` (grep across files).
 - On resume, replay prior turns into the messages array under a token budget;
@@ -122,6 +124,11 @@ Tab without the kitty keyboard protocol. Avoid it.
 
 Also provide a plain `linuxai "question"` form for scripting.
 
+Bare invocation on a TTY opens a Bubble Tea launcher. An active thread opens
+the menu with Continue selected; a missing, empty, or idle thread opens the
+prompt directly. The TUI exits before response streaming so output remains in
+the normal terminal scrollback. Piped input and argument prompts bypass it.
+
 ## Config and .env loading
 
 All configuration is read from environment variables:
@@ -132,9 +139,9 @@ All configuration is read from environment variables:
 - `LINUXAI_MODEL` — default model string.
 - `LINUXAI_SEARXNG_URL` — SearXNG host for the `--web` tier.
 
-Support a `.env` file for these, but write the loader yourself in stdlib. Do
-**not** add `github.com/joho/godotenv` or any module; a `.env` parser is about
-30 lines and pulling a dependency would break the single-static-binary rule.
+Support a `.env` file for these, but write the loader yourself in stdlib. A
+runtime `.env` dependency is unnecessary; the parser is small and the shipped
+binary must remain self-contained.
 
 Loader spec:
 
@@ -160,6 +167,8 @@ Ship a committed `.env.example` with placeholder values and add `.env` to
 4. Image attach: clipboard or `--image`, downscale, `image_url` block.
 5. SearXNG `--web` tier.
 6. Trigger: tmux `display-popup` binding plus the plain command form.
+7. Interactive launcher: Bubble Tea menu, prompt, thread picker, and history
+  search while retaining noninteractive argument and pipe workflows.
 
 ## Environment
 

@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"linuxai/internal/config"
 	"linuxai/internal/history"
@@ -16,11 +17,16 @@ import (
 	"linuxai/internal/llm"
 	"linuxai/internal/mdterm"
 	"linuxai/internal/searxng"
+	"linuxai/internal/tui"
 )
 
 // replayBudgetTokens caps how much prior thread history is replayed as
 // context on each turn (rough estimate: content length / 4).
 const replayBudgetTokens = 6000
+
+// threadIdleTimeout starts a new conversation after the current thread has
+// gone quiet for this long.
+const threadIdleTimeout = 5 * time.Minute
 
 // version is set at build time via -ldflags "-X main.version=...", normally
 // from `git describe --tags --always --dirty` (see scripts/package.sh).
@@ -35,18 +41,26 @@ func main() {
 }
 
 func run() error {
-	if err := config.LoadDotEnv(); err != nil {
-		return fmt.Errorf("loading .env: %w", err)
-	}
-
 	args, err := parseArgs(os.Args[1:])
 	if err != nil {
 		return err
 	}
 
+	if args.Help {
+		printHelp(os.Stdout)
+		return nil
+	}
 	if args.Version {
 		fmt.Println("linuxai " + version)
 		return nil
+	}
+
+	if err := config.LoadDotEnv(); err != nil {
+		return fmt.Errorf("loading .env: %w", err)
+	}
+	webAvailable := config.WebConfigured()
+	if args.Web && !webAvailable {
+		return fmt.Errorf("web search is not configured; set LINUXAI_SEARXNG_URL in the environment or config .env")
 	}
 
 	store, err := history.NewStore()
@@ -62,12 +76,7 @@ func run() error {
 		return runSearch(store, args.Search)
 	}
 
-	cfg, err := config.Load()
-	if err != nil {
-		return err
-	}
-
-	threadID, err := resolveThread(store, args)
+	threadID, fresh, err := resolveThread(store, args)
 	if err != nil {
 		return err
 	}
@@ -76,8 +85,25 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if strings.TrimSpace(prompt) == "" && stdinIsTerminal() {
+		result, err := tui.Run(store, threadID, fresh, args.Web, webAvailable)
+		if err != nil {
+			return err
+		}
+		if result.Canceled {
+			return nil
+		}
+		threadID = result.ThreadID
+		prompt = result.Prompt
+		args.Web = result.Web
+	}
 	if strings.TrimSpace(prompt) == "" {
 		return fmt.Errorf("no prompt given (pass it as an argument or pipe it on stdin)")
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		return err
 	}
 
 	imageDataURL, imageRef, err := loadImage(args.Image)
@@ -87,6 +113,9 @@ func run() error {
 
 	sentContent := prompt
 	if args.Web {
+		if err := cfg.ValidateWeb(); err != nil {
+			return err
+		}
 		results, err := searxng.Search(cfg.SearXNGURL, prompt)
 		if err != nil {
 			return fmt.Errorf("web search: %w", err)
@@ -100,15 +129,7 @@ func run() error {
 	}
 	priorMessages = history.ReplayBudget(priorMessages, replayBudgetTokens)
 
-	messages := make([]llm.Message, 0, len(priorMessages)+1)
-	for _, m := range priorMessages {
-		messages = append(messages, llm.Message{Role: m.Role, Content: m.Content})
-	}
-	messages = append(messages, llm.Message{
-		Role:         "user",
-		Content:      sentContent,
-		ImageDataURL: imageDataURL,
-	})
+	messages := buildMessages(cfg.Instructions, priorMessages, sentContent, imageDataURL)
 
 	if err := store.Append(threadID, history.Message{Role: "user", Content: prompt, Image: imageRef}); err != nil {
 		return fmt.Errorf("saving message: %w", err)
@@ -134,22 +155,101 @@ func run() error {
 	return nil
 }
 
-// resolveThread applies --new / --resume / bare-continue semantics and
-// returns the thread id to use for this invocation.
-func resolveThread(store *history.Store, args *cliArgs) (string, error) {
+func buildMessages(instructions string, prior []history.Message, prompt, imageDataURL string) []llm.Message {
+	messages := make([]llm.Message, 0, len(prior)+2)
+	messages = append(messages, llm.Message{Role: "system", Content: instructions})
+	for _, message := range prior {
+		messages = append(messages, llm.Message{Role: message.Role, Content: message.Content})
+	}
+	return append(messages, llm.Message{
+		Role:         "user",
+		Content:      prompt,
+		ImageDataURL: imageDataURL,
+	})
+}
+
+func printHelp(w io.Writer) {
+	fmt.Fprint(w, `linuxai - terminal-first assistant for Linux and programming
+
+Usage:
+	linuxai [options] [prompt...]
+	command | linuxai [options]
+
+Running linuxai without a prompt opens the interactive launcher on a terminal.
+
+Options:
+	-n, --new, --new-thread  Start a new conversation
+	-l, --list               List saved conversations
+	-r, --resume ID          Resume a saved conversation
+	-s, --search TERM        Search conversation history
+	-w, --web                Ground the answer with web search
+	-i, --image PATH         Attach an image file
+	-c, --clipboard          Attach an image from the local clipboard
+	-v, --version            Print version information
+	-h, --help               Show this help
+
+Configuration:
+	Local .env:       ./.env (highest file precedence)
+	Config directory: ${XDG_CONFIG_HOME:-~/.config}/linuxai
+	Config .env:      ${XDG_CONFIG_HOME:-~/.config}/linuxai/.env
+	Instructions:     ${XDG_CONFIG_HOME:-~/.config}/linuxai/instructions.txt
+
+Environment / .env keys:
+	NVIDIA_API_KEY       NVIDIA hosted endpoint API key
+	LINUXAI_BASE_URL     OpenAI-compatible API base URL
+	LINUXAI_MODEL        Model name
+	LINUXAI_SEARXNG_URL  SearXNG server; required for -w/--web
+
+Process environment values override .env values. If instructions.txt is
+missing or blank, linuxai uses its built-in OS/Linux/programming instructions.
+
+Examples:
+	linuxai -n how do I check disk usage
+	linuxai -r 20260704-143347-b9c9bd explain that another way
+	linuxai -w what is the latest stable Linux kernel
+`)
+}
+
+// resolveThread applies explicit flags and the idle-time rule. fresh reports
+// whether the invocation should open directly in a new-thread prompt.
+func resolveThread(store *history.Store, args *cliArgs) (id string, fresh bool, err error) {
+	return resolveThreadAt(store, args, time.Now())
+}
+
+func resolveThreadAt(store *history.Store, args *cliArgs, now time.Time) (id string, created bool, err error) {
 	switch {
 	case args.New:
-		return store.NewThread()
+		id, err := store.NewThread()
+		return id, true, err
 	case args.ResumeGiven:
 		if !store.ThreadExists(args.Resume) {
-			return "", fmt.Errorf("no such thread %q", args.Resume)
+			return "", false, fmt.Errorf("no such thread %q", args.Resume)
 		}
 		if err := store.SetCurrent(args.Resume); err != nil {
-			return "", err
+			return "", false, err
 		}
-		return args.Resume, nil
+		return args.Resume, false, nil
 	default:
-		return store.CurrentThreadID()
+		id, err := store.CurrentThreadID()
+		if err != nil {
+			return "", false, err
+		}
+		messages, err := store.Load(id)
+		if err != nil {
+			return "", false, err
+		}
+		if len(messages) == 0 {
+			return id, true, nil
+		}
+		modified, err := store.ThreadModified(id)
+		if err != nil {
+			return "", false, err
+		}
+		if now.Sub(modified) <= threadIdleTimeout {
+			return id, false, nil
+		}
+		id, err = store.NewThread()
+		return id, true, err
 	}
 }
 
@@ -234,4 +334,9 @@ func readPrompt(argPrompt string) (string, error) {
 		return "", fmt.Errorf("reading stdin: %w", err)
 	}
 	return string(data), nil
+}
+
+func stdinIsTerminal() bool {
+	stat, err := os.Stdin.Stat()
+	return err == nil && stat.Mode()&os.ModeCharDevice != 0
 }

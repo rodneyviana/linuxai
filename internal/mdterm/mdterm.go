@@ -2,8 +2,8 @@
 // sequences suitable for a terminal, without buffering the whole response
 // (so token-by-token streaming still feels live). It understands
 // **bold**, *italic*, `inline code`, fenced ```code blocks```, ATX headers,
-// "- "/"* " bullet lists, and pipe tables; anything else passes through
-// unchanged.
+// "- "/"* " bullet lists, pipe tables, and LaTeX math spans; anything else
+// passes through unchanged.
 package mdterm
 
 import (
@@ -30,6 +30,8 @@ const (
 	ansiBulletOff = "\x1b[39m"
 	ansiTableOn   = "\x1b[34m"
 	ansiTableOff  = "\x1b[39m"
+	ansiMathOn    = "\x1b[36m"
+	ansiMathOff   = "\x1b[39m"
 	ansiReset     = "\x1b[0m"
 )
 
@@ -264,6 +266,15 @@ func (r *Renderer) step() (consumed int, out string, needMore bool) {
 		return 1, ansiCodeOff, false
 	}
 
+	if buf[0] == '$' || buf[0] == '\\' {
+		if consumed, math, matched, needMore := matchMath(buf); matched {
+			r.lineStart = false
+			return consumed, ansiMathOn + formatLatex(math) + ansiMathOff, false
+		} else if needMore {
+			return 0, "", true
+		}
+	}
+
 	if buf[0] == '\n' {
 		r.lineStart = true
 		return 1, "\n", false
@@ -369,23 +380,54 @@ func parseTableRow(line []byte) ([]string, bool) {
 	var parts []string
 	var cell strings.Builder
 	inCode := false
+	mathClose := ""
 	escaped := false
-	for _, char := range trimmed[1 : len(trimmed)-1] {
+	for position := 1; position < len(trimmed)-1; {
+		char, size := utf8.DecodeRuneInString(trimmed[position:])
 		switch {
 		case escaped:
 			cell.WriteRune(char)
 			escaped = false
+			position += size
+		case !inCode && mathClose == "" && char == '\\' && position+1 < len(trimmed)-1 && (trimmed[position+1] == '(' || trimmed[position+1] == '['):
+			if trimmed[position+1] == '(' {
+				mathClose = `\)`
+			} else {
+				mathClose = `\]`
+			}
+			cell.WriteString(trimmed[position : position+2])
+			position += 2
+		case !inCode && mathClose != "" && strings.HasPrefix(trimmed[position:], mathClose):
+			cell.WriteString(mathClose)
+			position += len(mathClose)
+			mathClose = ""
 		case char == '\\':
 			escaped = true
 			cell.WriteRune(char)
+			position += size
 		case char == '`':
 			inCode = !inCode
 			cell.WriteRune(char)
-		case char == '|' && !inCode:
+			position += size
+		case char == '$' && !inCode && (mathClose == "" || mathClose[0] == '$'):
+			delimiter := 1
+			if position+1 < len(trimmed)-1 && trimmed[position+1] == '$' {
+				delimiter = 2
+			}
+			if mathClose == "" {
+				mathClose = strings.Repeat("$", delimiter)
+			} else if len(mathClose) == delimiter {
+				mathClose = ""
+			}
+			cell.WriteString(trimmed[position : position+delimiter])
+			position += delimiter
+		case char == '|' && !inCode && mathClose == "":
 			parts = append(parts, strings.TrimSpace(cell.String()))
 			cell.Reset()
+			position += size
 		default:
 			cell.WriteRune(char)
+			position += size
 		}
 	}
 	parts = append(parts, strings.TrimSpace(cell.String()))
@@ -507,11 +549,30 @@ func renderInline(text string, baseBold bool) (string, int) {
 				out.WriteString(ansiCodeOff)
 			}
 			position++
-		case text[position] == '\\' && position+1 < len(text):
-			_, size := utf8.DecodeRuneInString(text[position+1:])
-			out.WriteString(text[position+1 : position+1+size])
-			visibleWidth++
-			position += 1 + size
+		case text[position] == '$' || text[position] == '\\':
+			consumed, math, matched, _ := matchMath([]byte(text[position:]))
+			if !matched {
+				if text[position] == '$' || position+1 >= len(text) {
+					out.WriteByte(text[position])
+					visibleWidth++
+					position++
+					continue
+				}
+				_, size := utf8.DecodeRuneInString(text[position+1:])
+				out.WriteString(text[position+1 : position+1+size])
+				visibleWidth++
+				position += 1 + size
+				continue
+			}
+			formatted := formatLatex(math)
+			out.WriteString(ansiMathOn)
+			out.WriteString(formatted)
+			out.WriteString(ansiMathOff)
+			if baseBold {
+				out.WriteString(ansiBoldOn)
+			}
+			visibleWidth += utf8.RuneCountInString(formatted)
+			position += consumed
 		default:
 			_, size := utf8.DecodeRuneInString(text[position:])
 			out.WriteString(text[position : position+size])

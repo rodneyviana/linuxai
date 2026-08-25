@@ -31,6 +31,47 @@ func TestParseArgsFlagsAnywhereInArgv(t *testing.T) {
 	}
 }
 
+func TestParseArgsNewThreadAlias(t *testing.T) {
+	a, err := parseArgs([]string{"--new-thread", "ask", "this"})
+	if err != nil {
+		t.Fatalf("parseArgs: %v", err)
+	}
+	if !a.New || a.Prompt != "ask this" {
+		t.Errorf("parseArgs = %+v, want New and prompt without the alias", a)
+	}
+}
+
+func TestParseArgsShortBooleanAliases(t *testing.T) {
+	a, err := parseArgs([]string{"-n", "-l", "-w", "-v", "-h", "-c"})
+	if err != nil {
+		t.Fatalf("parseArgs: %v", err)
+	}
+	if !a.New || !a.List || !a.Web || !a.Version || !a.Help || a.Image != "-" {
+		t.Errorf("short aliases were not all recognized: %+v", a)
+	}
+}
+
+func TestParseArgsShortValueAliases(t *testing.T) {
+	a, err := parseArgs([]string{"-r", "thread-id", "-s", "inode", "-i", "/tmp/shot.png", "question"})
+	if err != nil {
+		t.Fatalf("parseArgs: %v", err)
+	}
+	if !a.ResumeGiven || a.Resume != "thread-id" || !a.SearchGiven || a.Search != "inode" || a.Image != "/tmp/shot.png" {
+		t.Errorf("short value aliases were not parsed correctly: %+v", a)
+	}
+	if a.Prompt != "question" {
+		t.Errorf("Prompt = %q, want %q", a.Prompt, "question")
+	}
+}
+
+func TestParseArgsShortValueAliasMissingValue(t *testing.T) {
+	for _, flag := range []string{"-r", "-s", "-i"} {
+		if _, err := parseArgs([]string{flag}); err == nil {
+			t.Errorf("expected an error when %s has no value", flag)
+		}
+	}
+}
+
 func TestParseArgsResume(t *testing.T) {
 	a, err := parseArgs([]string{"--resume", "20260704-143347-b9c9bd", "one", "more", "thing"})
 	if err != nil {

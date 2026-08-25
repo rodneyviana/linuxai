@@ -9,7 +9,8 @@ Full rationale, model options, and message shapes: see @docs/DESIGN.md
 
 ## Stack (do not change without discussion)
 
-- Language: **Go**. Standard library only. No third-party modules.
+- Language: **Go**. Third-party modules are allowed only when they can be
+  compiled into the shipped static binary and introduce no runtime dependency.
   - HTTP: `net/http`. JSON: `encoding/json`. Images: `encoding/base64`.
 - Ship as a single static binary. Always build with `CGO_ENABLED=0`.
 - The whole point is "scp one file to any box and run", so nothing may
@@ -41,8 +42,7 @@ gofmt -l .   # must be clean
 - All config comes from environment variables (`NVIDIA_API_KEY`, base URL,
   default model, SearXNG host, etc.).
 - Support loading a `.env` file, but implement it with a small stdlib parser.
-  **Do not add `godotenv` or any other module** — that would break the
-  zero-dependency rule. See DESIGN.md for the loader spec.
+  **Do not add a runtime `.env` dependency.** See DESIGN.md for the loader spec.
 - Load order: real process env wins; `.env` only fills values not already set.
   Look for `./.env` first, then `~/.config/linuxai/.env`.
 - `.env` holds the API key, so it must be gitignored. Commit `.env.example`
@@ -80,6 +80,7 @@ gofmt -l .   # must be clean
 
 ## Conventions
 
-- Small functions, standard `gofmt`, no external deps ever.
+- Small functions, standard `gofmt`, and no dependency that prevents a static
+  `CGO_ENABLED=0` build or requires files/libraries beside the binary.
 - Any generated prose (commit messages, summaries) should read naturally and
   avoid em-dashes.

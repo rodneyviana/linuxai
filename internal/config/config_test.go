@@ -1,6 +1,11 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func clearConfigEnv(t *testing.T) {
 	t.Helper()
@@ -70,5 +75,69 @@ func TestLoadMissingKeyOKForOllama(t *testing.T) {
 	}
 	if cfg.APIKey != "" {
 		t.Errorf("APIKey = %q, want empty", cfg.APIKey)
+	}
+}
+
+func TestLoadInstructionsDefaultsWhenMissingOrBlank(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	got, err := LoadInstructions()
+	if err != nil {
+		t.Fatalf("LoadInstructions missing: %v", err)
+	}
+	if got != DefaultInstructions {
+		t.Errorf("missing instructions = %q, want default %q", got, DefaultInstructions)
+	}
+	for _, phrase := range []string{"do not apologize", "operating systems", "suggest a computing-related way to reframe"} {
+		if !strings.Contains(strings.ToLower(got), phrase) {
+			t.Errorf("default instructions do not contain %q: %q", phrase, got)
+		}
+	}
+
+	path, err := InstructionsPath()
+	if err != nil {
+		t.Fatalf("InstructionsPath: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(" \n\t"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	got, err = LoadInstructions()
+	if err != nil {
+		t.Fatalf("LoadInstructions blank: %v", err)
+	}
+	if got != DefaultInstructions {
+		t.Errorf("blank instructions = %q, want default %q", got, DefaultInstructions)
+	}
+}
+
+func TestLoadInstructionsUsesConfigFile(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	path := filepath.Join(configHome, "linuxai", "instructions.txt")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("  Answer in haiku.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	got, err := LoadInstructions()
+	if err != nil {
+		t.Fatalf("LoadInstructions: %v", err)
+	}
+	if got != "Answer in haiku." {
+		t.Errorf("instructions = %q, want trimmed file content", got)
+	}
+}
+
+func TestValidateWeb(t *testing.T) {
+	if err := (&Config{}).ValidateWeb(); err == nil || !strings.Contains(err.Error(), "LINUXAI_SEARXNG_URL") {
+		t.Errorf("unconfigured ValidateWeb error = %v", err)
+	}
+	if err := (&Config{SearXNGURL: "http://localhost:8080"}).ValidateWeb(); err != nil {
+		t.Errorf("configured ValidateWeb: %v", err)
 	}
 }

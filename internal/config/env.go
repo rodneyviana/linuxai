@@ -64,9 +64,9 @@ func LoadDotEnv() error {
 		return err
 	}
 
-	home, err := os.UserHomeDir()
+	configDir, err := ConfigDir()
 	if err == nil {
-		if err := loadEnvFile(filepath.Join(home, ".config", "linuxai", ".env")); err != nil {
+		if err := loadEnvFile(filepath.Join(configDir, ".env")); err != nil {
 			return err
 		}
 	}

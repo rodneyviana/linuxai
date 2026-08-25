@@ -13,6 +13,7 @@ type cliArgs struct {
 	List    bool
 	Web     bool
 	Version bool
+	Help    bool
 	Resume  string // thread id; ResumeGiven distinguishes "" from unset
 	Search  string // search term; SearchGiven distinguishes "" from unset
 	Image   string // path from --image
@@ -23,43 +24,44 @@ type cliArgs struct {
 	Prompt string
 }
 
-// parseArgs recognizes --new, --list, --web, --version, --clipboard,
-// --resume <id>, --search <term>, and --image <path> wherever they appear
-// in args, and joins every other token, in order, into the prompt.
+// parseArgs recognizes long options and their one-letter aliases wherever they
+// appear, and joins every other token, in order, into the prompt.
 func parseArgs(args []string) (*cliArgs, error) {
 	a := &cliArgs{}
 	var promptParts []string
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
-		case "--new":
+		case "--new", "--new-thread", "-n":
 			a.New = true
-		case "--list":
+		case "--list", "-l":
 			a.List = true
-		case "--web":
+		case "--web", "-w":
 			a.Web = true
-		case "--version":
+		case "--version", "-v":
 			a.Version = true
-		case "--clipboard":
+		case "--help", "-h":
+			a.Help = true
+		case "--clipboard", "-c":
 			a.Image = "-" // sentinel: read from clipboard instead of a path
-		case "--resume":
+		case "--resume", "-r":
 			i++
 			if i >= len(args) {
-				return nil, fmt.Errorf("--resume requires a thread id")
+				return nil, fmt.Errorf("%s requires a thread id", args[i-1])
 			}
 			a.Resume = args[i]
 			a.ResumeGiven = true
-		case "--search":
+		case "--search", "-s":
 			i++
 			if i >= len(args) {
-				return nil, fmt.Errorf("--search requires a search term")
+				return nil, fmt.Errorf("%s requires a search term", args[i-1])
 			}
 			a.Search = args[i]
 			a.SearchGiven = true
-		case "--image":
+		case "--image", "-i":
 			i++
 			if i >= len(args) {
-				return nil, fmt.Errorf("--image requires a file path")
+				return nil, fmt.Errorf("%s requires a file path", args[i-1])
 			}
 			a.Image = args[i]
 		default:
