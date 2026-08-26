@@ -26,6 +26,9 @@ func NewConsent(input io.Reader, output io.Writer) *Consent {
 	if input != nil {
 		reader = bufio.NewReader(input)
 	}
+	if output == nil {
+		output = io.Discard
+	}
 	return &Consent{input: reader, output: output, approved: make(map[string]bool)}
 }
 
@@ -57,9 +60,7 @@ func (c *Consent) Authorize(origin, rawURL string) bool {
 		return true
 	}
 	if c.input == nil {
-		if c.output != nil {
-			fmt.Fprintf(c.output, "Web read denied for %s: no interactive terminal for authorization.\n", origin)
-		}
+		fmt.Fprintf(c.output, "Web read denied for %s: no interactive terminal for authorization.\n", origin)
 		return false
 	}
 

@@ -328,3 +328,12 @@ func TestConsentOnceDoesNotPersistAndNoTTYDenies(t *testing.T) {
 		t.Errorf("output = %q", output.String())
 	}
 }
+
+func TestConsentNilOutputIsSafe(t *testing.T) {
+	if NewConsent(nil, nil).Authorize("https://example.com", "https://example.com") {
+		t.Fatal("non-interactive nil-output consent unexpectedly allowed")
+	}
+	if !NewConsent(strings.NewReader("o\n"), nil).Authorize("https://example.com", "https://example.com") {
+		t.Fatal("interactive nil-output consent unexpectedly denied")
+	}
+}
