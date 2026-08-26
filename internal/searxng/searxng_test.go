@@ -76,21 +76,17 @@ func TestSearchNonJSONContentType(t *testing.T) {
 	}
 }
 
-func TestGroundingBlockFormatsResults(t *testing.T) {
-	results := []Result{
-		{Title: "Kernel Archives", URL: "https://kernel.org", Content: "Latest releases"},
-	}
-	block := GroundingBlock(results, "what is the latest kernel")
+func TestSearchRejectsOversizedResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"results":[{"content":"`))
+		w.Write([]byte(strings.Repeat("x", maxResponseBytes)))
+		w.Write([]byte(`"}]}`))
+	}))
+	defer server.Close()
 
-	for _, want := range []string{"what is the latest kernel", "Kernel Archives", "https://kernel.org", "Latest releases"} {
-		if !strings.Contains(block, want) {
-			t.Errorf("grounding block missing %q\ngot: %s", want, block)
-		}
-	}
-}
-
-func TestGroundingBlockEmptyResults(t *testing.T) {
-	if got := GroundingBlock(nil, "query"); got != "" {
-		t.Errorf("GroundingBlock(nil) = %q, want empty string", got)
+	_, err := Search(server.URL, "query")
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("Search error = %v, want size-limit error", err)
 	}
 }

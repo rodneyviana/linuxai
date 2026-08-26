@@ -2,6 +2,7 @@ package llm
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -56,6 +57,96 @@ func TestMessageMarshalJSONWithImage(t *testing.T) {
 	}
 	if got.Content[1].Type != "image_url" || got.Content[1].ImageURL.URL != "data:image/jpeg;base64,AAAA" {
 		t.Errorf("content[1] = %+v, want image_url part", got.Content[1])
+	}
+}
+
+func TestMessageMarshalJSONToolMessages(t *testing.T) {
+	call := ToolCall{ID: "call_1", Type: "function", Function: FunctionCall{Name: "web_search", Arguments: `{"query":"linux"}`}}
+	assistant, err := json.Marshal(Message{Role: "assistant", ToolCalls: []ToolCall{call}})
+	if err != nil {
+		t.Fatalf("Marshal assistant: %v", err)
+	}
+	if !strings.Contains(string(assistant), `"tool_calls"`) || !strings.Contains(string(assistant), `"call_1"`) {
+		t.Errorf("assistant JSON = %s, want tool_calls and call id", assistant)
+	}
+
+	toolResult, err := json.Marshal(Message{Role: "tool", ToolCallID: "call_1", Content: `{"results":[]}`})
+	if err != nil {
+		t.Fatalf("Marshal tool result: %v", err)
+	}
+	if !strings.Contains(string(toolResult), `"tool_call_id":"call_1"`) {
+		t.Errorf("tool result JSON = %s, want tool_call_id", toolResult)
+	}
+}
+
+func TestStreamChatToolsAggregatesToolCallDeltas(t *testing.T) {
+	var request struct {
+		Tools []Tool `json:"tools"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		chunks := []string{
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"web_","arguments":"{\"query\":"}}]}}]}`,
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"search","arguments":"\"latest kernel\"}"}}]},"finish_reason":"tool_calls"}]}`,
+		}
+		for _, chunk := range chunks {
+			fmt.Fprintf(w, "data: %s\n\n", chunk)
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "key")
+	tools := []Tool{{Type: "function", Function: FunctionDefinition{Name: "web_search", Parameters: map[string]any{"type": "object"}}}}
+	response, err := client.StreamChatTools("m", []Message{{Role: "user", Content: "latest?"}}, tools, func(string) {})
+	if err != nil {
+		t.Fatalf("StreamChatTools: %v", err)
+	}
+	if len(request.Tools) != 1 || request.Tools[0].Function.Name != "web_search" {
+		t.Errorf("request tools = %+v, want web_search", request.Tools)
+	}
+	if len(response.ToolCalls) != 1 {
+		t.Fatalf("tool calls = %+v, want one", response.ToolCalls)
+	}
+	call := response.ToolCalls[0]
+	if call.ID != "call_1" || call.Function.Name != "web_search" || call.Function.Arguments != `{"query":"latest kernel"}` {
+		t.Errorf("tool call = %+v", call)
+	}
+	if response.FinishReason != "tool_calls" {
+		t.Errorf("finish reason = %q, want tool_calls", response.FinishReason)
+	}
+}
+
+func TestStreamChatToolsSendsExplicitToolChoice(t *testing.T) {
+	var request struct {
+		Tools      []Tool `json:"tools"`
+		ToolChoice string `json:"tool_choice"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"final\"},\"finish_reason\":\"stop\"}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "key")
+	tools := []Tool{{Type: "function", Function: FunctionDefinition{Name: "web_search"}}}
+	response, err := client.StreamChatToolsWithChoice("m", nil, tools, "none", func(string) {})
+	if err != nil {
+		t.Fatalf("StreamChatToolsWithChoice: %v", err)
+	}
+	if request.ToolChoice != "none" || len(request.Tools) != 1 {
+		t.Errorf("tool_choice = %q, tools = %d", request.ToolChoice, len(request.Tools))
+	}
+	if response.Content != "final" {
+		t.Errorf("content = %q", response.Content)
 	}
 }
 

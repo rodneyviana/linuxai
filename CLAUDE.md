@@ -3,7 +3,8 @@
 A terminal-first CLI assistant for Linux and Linux-programming questions.
 Runs locally and over SSH. You trigger it with a hotkey, type a prompt, and it
 streams an answer. It can optionally take a manually attached image and
-optionally ground answers with a self-hosted SearXNG search.
+optionally let the model search through self-hosted SearXNG and read guarded
+public web pages.
 
 Full rationale, model options, and message shapes: see @docs/DESIGN.md
 
@@ -50,7 +51,7 @@ gofmt -l .   # must be clean
 
 ## Default models (NIM model strings)
 
-- Default: `qwen/qwen3.5-122b-a10b`
+- Default: `openai/gpt-oss-20b`
 - Fast / screenshot-OCR tier: `nvidia/nemotron-nano-12b-v2-vl`
 - Quality escalation: `moonshotai/kimi-k2.6`
 - Light alternative: `mistralai/ministral-14b-instruct-2512`
@@ -61,8 +62,10 @@ gofmt -l .   # must be clean
   Primary is a tmux popup; fallbacks are a readline chord and a desktop key.
 - Manual image attach only (no auto screen capture). Read the clipboard when
   local, accept `--image PATH` when remote. Downscale before sending.
-- Optional `--web` tier queries a self-hosted SearXNG JSON endpoint and injects
-  top snippets as grounding.
+- Optional `--web` exposes native `web_search` and `web_read` tools to the
+  model. Search uses a self-hosted SearXNG JSON endpoint. Page reads are
+  text-only, size-bounded, SSRF-resistant, and require user authorization for
+  origins outside the reviewed documentation whitelist.
 - History: append-only JSONL per session under
   `~/.local/share/linuxai/chats/`, with a `current` pointer for the active
   thread. Commands: bare (continue), `--new`, `--list`, `--resume <id>`,

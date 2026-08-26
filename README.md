@@ -24,16 +24,16 @@ failing on the first problem it finds.
 ## Versioning
 
 `linuxai --version` prints the build's version, derived from
-`git describe --tags --always --dirty` at build time (e.g. `v0.3.0`, or
-`v0.3.0-3-gabc1234` for commits since the last tag, or a bare commit hash
+`git describe --tags --always --dirty` at build time (e.g. `v0.4.0`, or
+`v0.4.0-3-gabc1234` for commits since the last tag, or a bare commit hash
 like `07fe69e` before any tag exists). A plain `go build` with no
 `-ldflags` reports `dev`.
 
 To cut a release, tag it and rebuild/repackage:
 
 ```bash
-git tag v0.3.0
-git push origin v0.3.0
+git tag v0.4.0
+git push origin v0.4.0
 ./scripts/package.sh
 ```
 
@@ -76,10 +76,12 @@ key required:
 | `internal/config` | `.env` parsing (quotes, comments, `export`), `./.env` vs `~/.config/linuxai/.env` precedence, process env always winning, `Load()` defaults and the missing-key error. |
 | `internal/history` | Thread create/append/load, the `current` pointer, `--list` ordering and titles, `--search`, and the replay token budget. Runs against a temp `$HOME`, never the real `~/.local/share/linuxai`. |
 | `internal/imageutil` | Downscaling math and that `ToDataURL` always produces a valid JPEG data URL under the size cap, even for images already narrower than the target width. |
-| `internal/llm` | The text-only vs. multimodal `Message` JSON shapes, and `StreamChat` against an `httptest` SSE server (token delivery, auth header, non-200 errors, malformed chunks). |
-| `internal/searxng` | `Search` against an `httptest` server (result capping, non-200, non-JSON content type) and `GroundingBlock` formatting. |
+| `internal/llm` | Text, image, assistant-tool-call, and tool-result message shapes; SSE text delivery; fragmented native tool-call assembly; authentication and error handling. |
+| `internal/searxng` | Search-tool queries against an `httptest` server, including result caps and non-200/non-JSON errors. |
 | `internal/mdterm` | Streaming Markdown-to-ANSI rendering (text styles, code, headers, bullets, tables, and Unicode LaTeX math), plain-text fallback, `NO_COLOR`, and byte-by-byte vs. whole-string equivalence (guards against chunk-boundary bugs). |
 | `internal/tui` | Launcher start screens, prompt submission, new-chat navigation, and conditional web-search toggling. |
+| `internal/webagent` | Native tool definitions, bounded search/read loops, structured tool results, activity output, and once/session/deny consent behavior. |
+| `internal/webread` | Origin trust rules, consent-before-fetch, redirect reauthorization, private-address blocking, MIME/size limits, and readable HTML extraction. |
 | `cmd/linuxai` | Long and short flag parsing, help output, system-message construction, prompt/image handling, and thread resolution for explicit, active, empty, idle, missing, and resumed threads. |
 
 Run just the tests with `go test ./...`, or `go test ./... -v` for
@@ -114,8 +116,8 @@ Only answer questions about operating systems, especially Linux if no OS is spec
 |---|---|
 | `NVIDIA_API_KEY` | API key for the NVIDIA hosted free endpoint (required unless pointing at Ollama). |
 | `LINUXAI_BASE_URL` | Backend base URL. Defaults to the NVIDIA endpoint; set to `http://localhost:11434/v1` to use local Ollama instead. |
-| `LINUXAI_MODEL` | Model string to use. Defaults to `qwen/qwen3.5-122b-a10b`. |
-| `LINUXAI_SEARXNG_URL` | SearXNG host for the `--web` grounding tier. Required to enable `-w`/`--web`; the TUI disables its web toggle when absent. Must point at the published port, and the instance needs `json` under `search.formats` in `settings.yml`. |
+| `LINUXAI_MODEL` | Model string to use. Defaults to `openai/gpt-oss-20b`. |
+| `LINUXAI_SEARXNG_URL` | SearXNG host used by the `web_search` tool. Required to enable `-w`/`--web`; the TUI disables its web toggle when absent. Must point at the published port, and the instance needs `json` under `search.formats` in `settings.yml`. |
 
 ## Use
 
@@ -139,9 +141,61 @@ five-minute-idle thread opens the prompt directly. The launcher can start a
 new chat, resume or search history, and toggle web search. It closes before the
 answer streams, so the response remains normal selectable terminal output.
 
+<p align="center">
+  <img src="linuxai-dialog.jpg" alt="linuxai new-thread prompt with web search toggle" width="760">
+</p>
+<p align="center"><em>New-thread prompt with the optional web-search toggle.</em></p>
+
+<p align="center">
+  <img src="linux-ai-dialog-2.jpg" alt="linuxai launcher menu showing the active thread and navigation choices" width="760">
+</p>
+<p align="center"><em>Active-thread menu with continue, new chat, resume, and history search actions.</em></p>
+
 Prompt keys are `Ctrl+S` to send, `Ctrl+N` for a new chat, `Ctrl+W` to toggle
 web search, and `Esc` to return to the menu. Argument prompts and piped input
 never open the launcher.
+
+### Web tools
+
+`-w`/`--web` exposes two native tools to the model: `web_search` queries the
+configured SearXNG instance, and `web_read` extracts readable text from a
+selected source. The model can refine searches, inspect more than one source,
+and stop when it has enough evidence. Search activity is printed to stderr;
+normal answer output remains clean when redirected. Without `--web`, neither
+tool is sent to the backend.
+
+Search is discovery only. Requests to read or summarize an article must use
+`web_read`; search snippets are never treated as the article. Search and read
+budgets are independent, so exhausting searches removes `web_search` but keeps
+`web_read` available for the selected results. RSS and Atom feeds are extracted
+as entry lists, and HTML pages include a bounded set of resolved links. For an
+article summary, linuxai keeps requiring `web_read` through feed/index pages
+until the chosen full article is extracted or access fails.
+
+Assistant text produced alongside tool calls is treated as internal planning
+and is not printed. Duplicate page URLs are not fetched twice, and only the
+accepted final answer is sent to the Markdown renderer or saved in history.
+
+Reading reviewed official documentation hosts (including kernel.org, major
+Linux distributions, GNU, man7.org, Go, Python, Rust, MDN, and Wikipedia) is
+automatic. Other origins prompt on `/dev/tty` with three choices: allow this
+URL once, allow the origin for this invocation, or deny. Piped prompts still
+use the controlling terminal for approval. If no interactive terminal exists,
+an unknown origin is denied instead of blocking. Redirects to a different
+origin are authorized separately.
+
+The reader accepts only public HTTP(S) text content. It blocks loopback,
+private, link-local, and metadata-service addresses even after approval; sends
+no cookies or credentials; executes no JavaScript; and limits redirects,
+response size, extracted text, searches, page reads, tool rounds, and total web
+context. When a tool budget is exhausted, linuxai disables the tools for one
+final synthesis turn instead of failing the request. Search snippets and
+fetched pages are marked as untrusted data, and the model is instructed to read
+important sources and cite their URLs.
+
+Native tool calling must be supported by the selected OpenAI-compatible model
+and endpoint. A backend that rejects `tools` returns its capability error
+instead of silently falling back to an unreliable text protocol.
 
 NVIDIA's free-tier endpoint occasionally stalls mid-stream (emits a token,
 then goes silent with no `[DONE]` and no close). If no new data arrives
@@ -174,7 +228,7 @@ together, in order, as the prompt.
 | `-r`, `--resume <id>` | Switch the active thread to `<id>` (see `--list`), then continue it with the given prompt. |
 | `-l`, `--list` | Print saved threads (id, last-modified time, title = first message). No LLM call. |
 | `-s`, `--search <term>` | Grep every saved thread for `<term>` and print matches. No LLM call. |
-| `-w`, `--web` | Ground the answer with top results from your SearXNG instance. Equivalent to starting the prompt with `/web `. |
+| `-w`, `--web` | Enable model-driven `web_search` and guarded `web_read`. Equivalent to starting the prompt with `/web `. |
 | `-i`, `--image <path>` | Attach an image file (downscaled, sent as `image_url` content). |
 | `-c`, `--clipboard` | Attach whatever image is on the local clipboard (`xclip`/`wl-paste`; requires `$DISPLAY` or `$WAYLAND_DISPLAY`, so it only works locally, not over plain SSH). |
 | `-v`, `--version` | Print the build's version and exit. No LLM call. |
@@ -237,7 +291,7 @@ rendering with Unicode LaTeX math, configurable system instructions, an
 interactive bare-command launcher, JSONL history with
 `--new`/`--list`/`--resume`/`--search`,
 manual image attach (`--image`/`--clipboard`) with stdlib-only
-downscaling, and `--web` SearXNG grounding.
+downscaling, and bounded `--web` search/read tools with per-origin consent.
 
 Not automated: the hotkey trigger (tmux/readline/desktop bindings above are
 provided as copy-paste snippets, not applied automatically).

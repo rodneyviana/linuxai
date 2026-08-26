@@ -1,10 +1,10 @@
-// Package searxng queries a self-hosted SearXNG instance's JSON API and
-// formats results as a grounding block for the LLM prompt.
+// Package searxng queries a self-hosted SearXNG instance's JSON API.
 package searxng
 
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -22,8 +22,11 @@ type searchResponse struct {
 	Results []Result `json:"results"`
 }
 
-// maxResults caps how many hits are folded into the grounding block.
-const maxResults = 5
+// maxResults caps how many hits are returned to the web_search tool.
+const (
+	maxResults       = 5
+	maxResponseBytes = 1024 * 1024
+)
 
 // Search queries baseURL's /search endpoint (format=json) for query and
 // returns the top results. baseURL must not include a trailing slash.
@@ -48,8 +51,17 @@ func Search(baseURL, query string) ([]Result, error) {
 		return nil, fmt.Errorf("searxng did not return JSON (got %q) - add \"json\" under search.formats in its settings.yml and restart it", ct)
 	}
 
+	limited := io.LimitReader(resp.Body, maxResponseBytes+1)
+	body, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, fmt.Errorf("reading searxng response: %w", err)
+	}
+	if len(body) > maxResponseBytes {
+		return nil, fmt.Errorf("searxng response exceeds %d byte limit", maxResponseBytes)
+	}
+
 	var parsed searchResponse
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+	if err := json.Unmarshal(body, &parsed); err != nil {
 		return nil, fmt.Errorf("decoding searxng response: %w", err)
 	}
 
@@ -57,20 +69,4 @@ func Search(baseURL, query string) ([]Result, error) {
 		parsed.Results = parsed.Results[:maxResults]
 	}
 	return parsed.Results, nil
-}
-
-// GroundingBlock formats search results as a prefix to prepend to the
-// user's question, instructing the model to use and cite the sources.
-func GroundingBlock(results []Result, query string) string {
-	if len(results) == 0 {
-		return ""
-	}
-
-	var b strings.Builder
-	b.WriteString("Web search results for \"" + query + "\". Use them to help answer, and cite sources by URL where relevant:\n\n")
-	for i, r := range results {
-		fmt.Fprintf(&b, "%d. %s (%s)\n   %s\n", i+1, r.Title, r.URL, r.Content)
-	}
-	b.WriteString("\nQuestion: " + query + "\n")
-	return b.String()
 }

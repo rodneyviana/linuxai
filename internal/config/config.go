@@ -9,7 +9,7 @@ import (
 
 const (
 	defaultBaseURL = "https://integrate.api.nvidia.com/v1"
-	defaultModel   = "qwen/qwen3.5-122b-a10b"
+	defaultModel   = "openai/gpt-oss-20b"
 
 	DefaultInstructions = "Only answer questions about operating systems, especially Linux if no OS is specified, and programming. Do not be verbose unless required. If a question is outside this scope, do not apologize or give only a generic refusal. Briefly explain that you can help with operating systems, Linux, command-line tools, system administration, software development, debugging, and programming, give one or two relevant examples, and suggest a computing-related way to reframe the question when natural."
 )

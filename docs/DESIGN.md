@@ -44,13 +44,13 @@ on shared trial credits.
 
 | Model string | Active / total | Inputs | Context | Role |
 |---|---|---|---|---|
-| `qwen/qwen3.5-122b-a10b` | 10B / 122B MoE | text, image, video | 262K | Default. Best balance of speed and quality; strong at code. |
+| `openai/gpt-oss-20b` | 3.6B / 21B MoE | text | 131K | Default. Current general-purpose model with native tool calling. |
 | `nvidia/nemotron-nano-12b-v2-vl` | 12B | text, multi-image | 128K | Fast tier. Best OCR / document intelligence for reading pasted terminal screenshots. |
 | `nvidia/nemotron-3-nano-omni` (30B-A3B) | ~3B / 30B MoE | text, image, video, audio | 256K | Efficiency champion; use if you want maximum tokens/sec. |
 | `mistralai/ministral-14b-instruct-2512` | 14B | text, image (up to 10) | 262K | Light, snappy alternative. |
 | `moonshotai/kimi-k2.6` | 32B / 1T MoE | text, image, video | 262K | Quality escalation for hard questions; heavier and slower. |
 
-Recommended default wiring: `qwen3.5-122b-a10b` as the daily driver,
+Recommended default wiring: `openai/gpt-oss-20b` as the daily driver,
 `nemotron-nano-12b-v2-vl` as the fast toggle, `kimi-k2.6` as the escalation.
 
 ## Request shapes
@@ -74,9 +74,10 @@ under ~180 KB for the hosted endpoint:
   ] } ] }
 ```
 
-Web-augmented (`--web`): fetch top SearXNG results and prepend a grounding
-block with each result's title, url, and snippet, then the user's question,
-with an instruction to use and cite the sources.
+Web-augmented (`--web`): advertise native `web_search` and `web_read` function
+tools to the model. Continue the chat-completions loop with structured
+assistant tool calls and matching tool-result messages until the model returns
+a final answer or reaches a local safety limit. Without `--web`, send no tools.
 
 ## Manual image attach
 
@@ -91,8 +92,26 @@ with an instruction to use and cite the sources.
 
 - Endpoint: `GET http://<searxng-host>/search?q=<query>&format=json`
 - Requires `json` under `search.formats` in SearXNG `settings.yml`.
-- Take top 3-5 results (title, url, content). If snippets are thin, optionally
-  fetch the full text of the single top result before answering.
+- `web_search` returns the top five titles, URLs, and snippets as untrusted
+  discovery material. The model chooses follow-up queries and source reads.
+- `web_read` accepts only HTTP(S) text pages, extracts readable text without
+  JavaScript, and rechecks authorization after cross-origin redirects.
+- Search and read have independent budgets. Exhausting search removes that tool
+  while preserving `web_read`; article summaries require a page read rather
+  than relying on snippets. RSS/Atom reads expose entry URLs and HTML reads
+  preserve bounded resolved links for subsequent full article reads. Continue
+  requiring `web_read` through feed/index pages until an article is extracted.
+- Buffer assistant content during tool-call turns and discard it as planning;
+  emit only the accepted final answer. Deduplicate page URLs within one turn.
+- Reviewed official documentation hosts and Wikipedia are read automatically.
+  Other origins require once/session/deny approval from `/dev/tty`; without a
+  controlling terminal they are denied.
+- DNS results are dialed by validated public IP. Loopback, private, link-local,
+  multicast, and metadata-service targets remain blocked after authorization.
+- Bound tool rounds, search/read counts, response bytes, extracted text, and
+  total tool context. On exhaustion, make one final request without tools so
+  the model synthesizes from collected evidence. Require citations for claims
+  based on web sources.
 - Toggle via `--web` flag or a `/web ` prefix in the prompt.
 
 ## History and sessions

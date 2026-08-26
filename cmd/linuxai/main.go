@@ -16,8 +16,9 @@ import (
 	"linuxai/internal/imageutil"
 	"linuxai/internal/llm"
 	"linuxai/internal/mdterm"
-	"linuxai/internal/searxng"
 	"linuxai/internal/tui"
+	"linuxai/internal/webagent"
+	"linuxai/internal/webread"
 )
 
 // replayBudgetTokens caps how much prior thread history is replayed as
@@ -111,16 +112,10 @@ func run() error {
 		return err
 	}
 
-	sentContent := prompt
 	if args.Web {
 		if err := cfg.ValidateWeb(); err != nil {
 			return err
 		}
-		results, err := searxng.Search(cfg.SearXNGURL, prompt)
-		if err != nil {
-			return fmt.Errorf("web search: %w", err)
-		}
-		sentContent = searxng.GroundingBlock(results, prompt)
 	}
 
 	priorMessages, err := store.Load(threadID)
@@ -129,7 +124,11 @@ func run() error {
 	}
 	priorMessages = history.ReplayBudget(priorMessages, replayBudgetTokens)
 
-	messages := buildMessages(cfg.Instructions, priorMessages, sentContent, imageDataURL)
+	instructions := cfg.Instructions
+	if args.Web {
+		instructions += "\n\n" + webagent.Instructions
+	}
+	messages := buildMessages(instructions, priorMessages, prompt, imageDataURL)
 
 	if err := store.Append(threadID, history.Message{Role: "user", Content: prompt, Image: imageRef}); err != nil {
 		return fmt.Errorf("saving message: %w", err)
@@ -137,18 +136,33 @@ func run() error {
 
 	client := llm.NewClient(cfg.BaseURL, cfg.APIKey)
 	renderer := mdterm.NewRenderer(os.Stdout, mdterm.ShouldColor(os.Stdout))
-	var reply strings.Builder
-	err = client.StreamChat(cfg.Model, messages, func(token string) {
-		renderer.WriteString(token)
-		reply.WriteString(token)
-	})
+	var reply string
+	if args.Web {
+		consent := webagent.NewTTYConsent(os.Stderr)
+		defer consent.Close()
+		runner := webagent.Runner{
+			SearXNGURL: cfg.SearXNGURL,
+			Reader:     webread.New(consent.Authorize),
+			Activity:   os.Stderr,
+		}
+		reply, err = runner.Run(client, cfg.Model, messages, func(token string) {
+			renderer.WriteString(token)
+		})
+	} else {
+		var streamed strings.Builder
+		err = client.StreamChat(cfg.Model, messages, func(token string) {
+			renderer.WriteString(token)
+			streamed.WriteString(token)
+		})
+		reply = streamed.String()
+	}
 	renderer.Close()
 	fmt.Println()
 	if err != nil {
 		return err
 	}
 
-	if err := store.Append(threadID, history.Message{Role: "assistant", Content: reply.String()}); err != nil {
+	if err := store.Append(threadID, history.Message{Role: "assistant", Content: reply}); err != nil {
 		return fmt.Errorf("saving reply: %w", err)
 	}
 
@@ -182,7 +196,7 @@ Options:
 	-l, --list               List saved conversations
 	-r, --resume ID          Resume a saved conversation
 	-s, --search TERM        Search conversation history
-	-w, --web                Ground the answer with web search
+	-w, --web                Enable model-driven web search and page reading
 	-i, --image PATH         Attach an image file
 	-c, --clipboard          Attach an image from the local clipboard
 	-v, --version            Print version information
