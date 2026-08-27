@@ -90,12 +90,45 @@ environment always win.
 cp .env.example .env      # or edit ~/.config/linuxai/.env
 ```
 
+You can also edit these values from the built-in settings dialog, either with
+`linuxai --config` or from **Settings** in the launcher menu. It writes
+`~/.config/linuxai/.env` in place, preserving your comments, and masks the API
+key while you type.
+
 | Variable | Purpose |
 |---|---|
 | `NVIDIA_API_KEY` | API key for the NVIDIA hosted free endpoint. Required unless you point at Ollama. |
 | `LINUXAI_BASE_URL` | Backend base URL. Defaults to the NVIDIA endpoint; set `http://localhost:11434/v1` to use local Ollama instead. |
 | `LINUXAI_MODEL` | Model string to use. Defaults to `openai/gpt-oss-20b`. |
 | `LINUXAI_SEARXNG_URL` | SearXNG instance used by the `web_search` tool. Required to enable `-w`/`--web`; the launcher hides its web toggle when unset. Must point at the published port, and the instance needs `json` under `search.formats` in `settings.yml`. |
+
+### Choosing a model
+
+The settings dialog has a model browser behind **Search models…**. It lists
+only chat-capable, non-deprecated models and can filter them by image input
+and tool calling, sort them by name or context size, and show a card with the
+full capability breakdown before you accept one.
+
+Two sources feed that list. Capabilities come from a catalog compiled into the
+binary, derived from the [langchain-nvidia][langchain-nvidia] profile data
+(which in turn comes from [models.dev][models-dev]). Availability comes from
+the backend's own `/models` endpoint, so the list reflects what your key can
+actually call, and it works against Ollama too. NVIDIA's API reports only model
+IDs, which is why capabilities need the separate catalog.
+
+By default the browser shows only models that appear in both sources. The
+endpoint advertises many IDs it will not actually serve to a given account, and
+those fail at request time with a 404 about a missing function. Press `Ctrl+N`
+to reveal them anyway; they are badged `unlisted` and their card says the
+capabilities are unknown.
+
+Press `Ctrl+R` in the browser to refresh the catalog from upstream. When it has
+changed, the new copy is saved to `~/.config/linuxai/models.json` and used in
+preference to the built-in one. Without that file, linuxai stays a single
+self-contained binary.
+
+[langchain-nvidia]: https://github.com/langchain-ai/langchain-nvidia
+[models-dev]: https://github.com/sst/models.dev
 
 ### Custom instructions
 
@@ -156,6 +189,8 @@ together, in order, as the prompt.
 | `-i`, `--image <path>` | Attach an image file (downscaled, sent as `image_url` content). |
 | `-c`, `--clipboard` | Attach whatever image is on the local clipboard (`xclip`/`wl-paste`; requires `$DISPLAY` or `$WAYLAND_DISPLAY`, so it only works locally, not over plain SSH). |
 | `-v`, `--version` | Print the build's version and exit. No LLM call. |
+| `-V`, `--verbose` | Trace each backend request on stderr and print token usage at the end. `-v` was already `--version`, hence the capital. |
+| `--config` | Open the settings dialog. No LLM call. |
 | `-h`, `--help` | Print usage, options, and examples. No configuration or LLM call. |
 
 Examples:
@@ -249,6 +284,35 @@ NVIDIA's free-tier endpoint occasionally stalls mid-stream (emits a token, then
 goes silent with no `[DONE]` and no close). If no new data arrives for 45
 seconds, linuxai aborts with `stream stalled: no data received for 45s` instead
 of hanging forever.
+
+A related failure is a stream that closes having produced nothing at all. That
+is reported as `backend returned an empty response`, and during a `--web` run as
+`backend returned an empty answer after N web tool round(s)`. Both are backend
+hiccups rather than configuration problems; re-run the prompt, or use `-V` to
+see which request came back empty. Some models do this more than others.
+
+### Verbose tracing
+
+`-V`/`--verbose` writes one line per backend request to stderr, plus a token
+usage summary at the end:
+
+```console
+$ linuxai -V what does lsof do
+linuxai: backend https://integrate.api.nvidia.com/v1
+linuxai: model openai/gpt-oss-20b
+linuxai: thread 20260826-115010-f83d2a (0 prior message(s) replayed)
+llm: request model=openai/gpt-oss-20b messages=2 tools=0 bytes=716
+lsof lists open files and the processes holding them.
+llm: response in 1.105s finish=stop content=121 chars tool_calls=0 tokens=121 prompt + 83 completion = 204 total
+
+linuxai: completed in 1.106s; tokens 121 prompt + 83 completion = 204 total
+```
+
+With `--web` the counts cover every round the agent made, not just the last.
+All of it goes to stderr, so piping stdout still yields only the answer. Token
+counts come from the backend; linuxai only asks for them in verbose mode,
+because not every OpenAI-compatible server accepts the request field that
+enables them.
 
 ## Hotkey trigger
 

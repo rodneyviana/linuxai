@@ -71,6 +71,8 @@ func run() error {
 
 	// Info commands that don't call the LLM.
 	switch {
+	case args.Config:
+		return tui.RunSettings(store)
 	case args.List:
 		return runList(store)
 	case args.SearchGiven:
@@ -135,8 +137,19 @@ func run() error {
 	}
 
 	client := llm.NewClient(cfg.BaseURL, cfg.APIKey)
+	trace := &tokenAwareTrace{out: os.Stderr}
+	if args.Verbose {
+		client.Trace = trace
+		reportStartup(os.Stderr, cfg, args, threadID, len(priorMessages), imageRef != "")
+	}
+	started := time.Now()
 	renderer := mdterm.NewRenderer(os.Stdout, mdterm.ShouldColor(os.Stdout))
+	emit := func(token string) {
+		renderer.WriteString(token)
+		trace.noteToken()
+	}
 	var reply string
+	var usage llm.Usage
 	if args.Web {
 		consent := webagent.NewTTYConsent(os.Stderr)
 		defer consent.Close()
@@ -145,19 +158,23 @@ func run() error {
 			Reader:     webread.New(consent.Authorize),
 			Activity:   os.Stderr,
 		}
-		reply, err = runner.Run(client, cfg.Model, messages, func(token string) {
-			renderer.WriteString(token)
-		})
+		reply, err = runner.Run(client, cfg.Model, messages, emit)
+		usage = runner.Usage
 	} else {
 		var streamed strings.Builder
-		err = client.StreamChat(cfg.Model, messages, func(token string) {
-			renderer.WriteString(token)
+		var response llm.Response
+		response, err = client.StreamChatTools(cfg.Model, messages, nil, func(token string) {
+			emit(token)
 			streamed.WriteString(token)
 		})
 		reply = streamed.String()
+		usage = response.Usage
 	}
 	renderer.Close()
 	fmt.Println()
+	if args.Verbose {
+		reportSummary(os.Stderr, usage, time.Since(started))
+	}
 	if err != nil {
 		return err
 	}
@@ -167,6 +184,46 @@ func run() error {
 	}
 
 	return nil
+}
+
+// tokenAwareTrace keeps trace lines off the end of streamed answer text, which
+// has no trailing newline of its own while it is still being written.
+type tokenAwareTrace struct {
+	out    io.Writer
+	inline bool
+}
+
+func (t *tokenAwareTrace) Write(p []byte) (int, error) {
+	if t.inline {
+		t.inline = false
+		fmt.Fprintln(t.out)
+	}
+	return t.out.Write(p)
+}
+
+func (t *tokenAwareTrace) noteToken() { t.inline = true }
+
+// reportStartup describes the effective configuration for -V/--verbose runs.
+func reportStartup(w io.Writer, cfg *config.Config, args *cliArgs, threadID string, replayed int, hasImage bool) {
+	fmt.Fprintf(w, "linuxai: version %s\n", version)
+	fmt.Fprintf(w, "linuxai: backend %s\n", cfg.BaseURL)
+	fmt.Fprintf(w, "linuxai: model %s\n", cfg.Model)
+	fmt.Fprintf(w, "linuxai: thread %s (%d prior message(s) replayed)\n", threadID, replayed)
+	fmt.Fprintf(w, "linuxai: instructions %d chars\n", len(cfg.Instructions))
+	if args.Web {
+		fmt.Fprintf(w, "linuxai: web tools enabled via %s\n", cfg.SearXNGURL)
+	}
+	if hasImage {
+		fmt.Fprintln(w, "linuxai: image attached")
+	}
+}
+
+func reportSummary(w io.Writer, usage llm.Usage, elapsed time.Duration) {
+	if usage.Empty() {
+		fmt.Fprintf(w, "linuxai: completed in %s; the backend reported no token usage\n", elapsed.Round(time.Millisecond))
+		return
+	}
+	fmt.Fprintf(w, "linuxai: completed in %s; tokens %s\n", elapsed.Round(time.Millisecond), usage)
 }
 
 func buildMessages(instructions string, prior []history.Message, prompt, imageDataURL string) []llm.Message {
@@ -199,6 +256,8 @@ Options:
 	-w, --web                Enable model-driven web search and page reading
 	-i, --image PATH         Attach an image file
 	-c, --clipboard          Attach an image from the local clipboard
+	    --config             Open the settings dialog
+	-V, --verbose            Trace requests and report token usage on stderr
 	-v, --version            Print version information
 	-h, --help               Show this help
 
@@ -207,6 +266,7 @@ Configuration:
 	Config directory: ${XDG_CONFIG_HOME:-~/.config}/linuxai
 	Config .env:      ${XDG_CONFIG_HOME:-~/.config}/linuxai/.env
 	Instructions:     ${XDG_CONFIG_HOME:-~/.config}/linuxai/instructions.txt
+	Model catalog:    ${XDG_CONFIG_HOME:-~/.config}/linuxai/models.json (optional)
 
 Environment / .env keys:
 	NVIDIA_API_KEY       NVIDIA hosted endpoint API key

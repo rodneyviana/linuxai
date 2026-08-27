@@ -30,6 +30,9 @@ const (
 	threadsScreen
 	searchScreen
 	resultsScreen
+	settingsScreen
+	modelSearchScreen
+	modelCardScreen
 )
 
 var (
@@ -53,6 +56,8 @@ type model struct {
 	webAvailable bool
 	prompt       textarea.Model
 	search       textinput.Model
+	settings     settingsState
+	picker       pickerState
 	threads      []history.ThreadSummary
 	results      []history.SearchResult
 	result       Result
@@ -102,6 +107,8 @@ func newModel(store *history.Store, currentID string, fresh, web, webAvailable b
 		screen:       screen,
 		prompt:       prompt,
 		search:       search,
+		settings:     newSettingsState(),
+		picker:       newPickerState(),
 		threads:      threads,
 		web:          web,
 		webAvailable: webAvailable,
@@ -142,6 +149,12 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateSearch(message, key, isKey)
 	case resultsScreen:
 		return m.updateResults(key, isKey)
+	case settingsScreen:
+		return m.updateSettings(message, key, isKey)
+	case modelSearchScreen:
+		return m.updatePicker(message, key, isKey)
+	case modelCardScreen:
+		return m.updateModelCard(key, isKey)
 	default:
 		return m, nil
 	}
@@ -176,6 +189,8 @@ func (m model) updateMenu(key tea.KeyMsg, isKey bool) (tea.Model, tea.Cmd) {
 			m.search.Focus()
 			return m, textinput.Blink
 		case 4:
+			return m.openSettings()
+		case 5:
 			m.result.Canceled = true
 			return m, tea.Quit
 		}
@@ -334,6 +349,16 @@ func (m *model) resizeInputs() {
 	}
 	m.prompt.SetWidth(width)
 	m.search.Width = width
+	// Settings rows are indented two columns and each input renders a
+	// two-column prompt, so they get less room than the plain inputs.
+	fieldWidth := m.contentWidth() - 8
+	if fieldWidth < 20 {
+		fieldWidth = 20
+	}
+	m.picker.query.Width = fieldWidth
+	for index := range m.settings.fields {
+		m.settings.fields[index].Width = fieldWidth
+	}
 }
 
 func (m model) View() string {
@@ -349,6 +374,12 @@ func (m model) View() string {
 		body = m.searchView()
 	case resultsScreen:
 		body = m.resultsView()
+	case settingsScreen:
+		body = m.settingsView()
+	case modelSearchScreen:
+		body = m.modelSearchView()
+	case modelCardScreen:
+		body = m.modelCardView()
 	}
 	return boxStyle.Width(m.contentWidth()).Render(body)
 }
@@ -480,7 +511,7 @@ func (m model) visibleRows() int {
 }
 
 func menuItems() []string {
-	return []string{"Continue current thread", "New chat", "Resume another thread", "Search history", "Quit"}
+	return []string{"Continue current thread", "New chat", "Resume another thread", "Search history", "Settings", "Quit"}
 }
 
 func moveCursor(cursor, delta, length int) int {

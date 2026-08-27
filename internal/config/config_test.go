@@ -27,11 +27,11 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.APIKey != "test-key" {
 		t.Errorf("APIKey = %q, want %q", cfg.APIKey, "test-key")
 	}
-	if cfg.BaseURL != defaultBaseURL {
-		t.Errorf("BaseURL = %q, want default %q", cfg.BaseURL, defaultBaseURL)
+	if cfg.BaseURL != DefaultBaseURL {
+		t.Errorf("BaseURL = %q, want default %q", cfg.BaseURL, DefaultBaseURL)
 	}
-	if cfg.Model != defaultModel {
-		t.Errorf("Model = %q, want default %q", cfg.Model, defaultModel)
+	if cfg.Model != DefaultModel {
+		t.Errorf("Model = %q, want default %q", cfg.Model, DefaultModel)
 	}
 }
 

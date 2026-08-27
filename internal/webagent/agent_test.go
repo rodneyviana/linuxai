@@ -100,6 +100,65 @@ func TestRunnerExecutesSearchAndReturnsFinalAnswer(t *testing.T) {
 	}
 }
 
+// An empty answer must surface as an error; returning it silently made the
+// command exit successfully with no output at all.
+func TestRunnerRejectsEmptyAnswerAfterToolUse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"results": []map[string]string{{
+			"title": "Kernel Archives", "url": "https://kernel.org", "content": "Current releases",
+		}}})
+	}))
+	defer server.Close()
+
+	client := &fakeClient{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "web_search", Arguments: `{"query":"latest kernel"}`}}}, FinishReason: "tool_calls"},
+		{Content: "   ", FinishReason: "stop"},
+	}}
+	var output bytes.Buffer
+	runner := Runner{SearXNGURL: server.URL, Activity: io.Discard}
+	reply, err := runner.Run(client, "model", []llm.Message{{Role: "user", Content: "latest?"}}, func(token string) {
+		output.WriteString(token)
+	})
+	if err == nil {
+		t.Fatalf("expected an error, got reply %q", reply)
+	}
+	if !strings.Contains(err.Error(), "empty answer") {
+		t.Errorf("error = %v, want it to mention an empty answer", err)
+	}
+}
+
+func TestRunnerAccumulatesTokenUsage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"results": []map[string]string{{
+			"title": "Kernel Archives", "url": "https://kernel.org", "content": "Current releases",
+		}}})
+	}))
+	defer server.Close()
+
+	client := &fakeClient{responses: []llm.Response{
+		{
+			ToolCalls:    []llm.ToolCall{{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "web_search", Arguments: `{"query":"latest kernel"}`}}},
+			FinishReason: "tool_calls",
+			Usage:        llm.Usage{PromptTokens: 100, CompletionTokens: 20, TotalTokens: 120},
+		},
+		{
+			Content:      "Linux is current.",
+			FinishReason: "stop",
+			Usage:        llm.Usage{PromptTokens: 300, CompletionTokens: 40, TotalTokens: 340},
+		},
+	}}
+	runner := Runner{SearXNGURL: server.URL, Activity: io.Discard}
+	if _, err := runner.Run(client, "model", []llm.Message{{Role: "user", Content: "latest?"}}, func(string) {}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	want := llm.Usage{PromptTokens: 400, CompletionTokens: 60, TotalTokens: 460}
+	if runner.Usage != want {
+		t.Errorf("Usage = %+v, want %+v", runner.Usage, want)
+	}
+}
+
 func TestRunnerDoesNotFetchDuplicateReadURL(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{
 		{ToolCalls: []llm.ToolCall{{ID: "read_1", Function: llm.FunctionCall{Name: "web_read", Arguments: `{"url":"https://example.com/"}`}}}},

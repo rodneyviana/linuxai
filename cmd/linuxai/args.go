@@ -14,6 +14,8 @@ type cliArgs struct {
 	Web     bool
 	Version bool
 	Help    bool
+	Config  bool
+	Verbose bool
 	Resume  string // thread id; ResumeGiven distinguishes "" from unset
 	Search  string // search term; SearchGiven distinguishes "" from unset
 	Image   string // path from --image
@@ -42,6 +44,11 @@ func parseArgs(args []string) (*cliArgs, error) {
 			a.Version = true
 		case "--help", "-h":
 			a.Help = true
+		// -v is already --version, so verbose takes the capital short form.
+		case "--verbose", "-V":
+			a.Verbose = true
+		case "--config":
+			a.Config = true
 		case "--clipboard", "-c":
 			a.Image = "-" // sentinel: read from clipboard instead of a path
 		case "--resume", "-r":

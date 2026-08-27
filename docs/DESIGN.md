@@ -158,6 +158,10 @@ All configuration is read from environment variables:
 - `LINUXAI_MODEL` — default model string.
 - `LINUXAI_SEARXNG_URL` — SearXNG host for the `--web` tier.
 
+These four are what the settings dialog edits. An optional
+`~/.config/linuxai/models.json` holds an updated model catalog, and
+`~/.config/linuxai/instructions.txt` overrides the built-in system prompt.
+
 Support a `.env` file for these, but write the loader yourself in stdlib. A
 runtime `.env` dependency is unnecessary; the parser is small and the shipped
 binary must remain self-contained.
@@ -176,6 +180,77 @@ Loader spec:
 Ship a committed `.env.example` with placeholder values and add `.env` to
 `.gitignore`.
 
+Writing the file back is supported too, for the settings dialog. The writer
+rewrites `~/.config/linuxai/.env` in place: existing comments, ordering, and
+keys it does not manage are preserved, changed keys are edited where they sit
+(keeping any `export ` prefix), and new keys are appended. The file is created
+`0600` inside a `0700` directory because it holds the API key. Values are
+quoted only when they contain whitespace or `#`, matching what the loader can
+actually parse back; the loader strips one layer of quotes and does not process
+escapes, so the writer must not emit any.
+
+## Settings dialog and model catalog
+
+`linuxai --config`, or Settings in the launcher, opens a dialog over the four
+`.env` keys. The API key field is masked while editing. Saving writes the file
+and calls `os.Setenv` so the change applies to the running process.
+
+The model field has a browser behind it. Two independent sources feed it:
+
+- **Capabilities** come from a catalog derived from the langchain-nvidia
+  `_profiles.py` data (itself generated from models.dev). A pruned copy, holding
+  only chat-capable non-deprecated models, is `go:embed`ed so the binary stays
+  self-contained. `Ctrl+R` re-downloads the upstream file, parses it, and writes
+  `~/.config/linuxai/models.json` only when the content actually changed; that
+  file then takes precedence over the embedded copy.
+- **Availability** comes from the backend's own OpenAI-compatible `/models`
+  endpoint, which works for Ollama as well as NVIDIA.
+
+Both are needed because neither is sufficient. NVIDIA's API reports only
+`id`, `object`, `created`, and `owned_by` for each model, with no context
+window, modality, or tool-calling information anywhere in the documented API.
+The capability data on build.nvidia.com is behind an AWS WAF bot challenge and
+a per-deploy URL hash, so it is not a usable source.
+
+Conversely, appearing in `/models` does not mean a model is callable: the
+endpoint advertises many IDs that return a 404 about a missing function for a
+given account. Only a minority of live IDs have an exact match in the profile
+catalog. So the browser shows the intersection by default, treats the
+unmatched remainder as opt-in behind `Ctrl+N`, badges them `unlisted`, and says
+on their card that capabilities are unknown and the model may 404. A 404 from
+the backend also points the user at `linuxai --config`.
+
+Profile IDs and live IDs are matched exactly. Fuzzy prefix matching was
+measured and recovered only one additional model out of dozens, which does not
+justify the risk of attaching the wrong context window to a model.
+
+The Python literal is parsed by a small stdlib recursive-descent parser that
+accepts dicts, lists, strings, ints, floats, `True`/`False`/`None`, comments,
+and trailing commas, and rejects everything else. Regenerate the embedded
+baseline with `go run ./internal/models/gen`.
+
+## Verbose tracing and token usage
+
+`-V`/`--verbose` sets a trace writer on the LLM client. `-v` was already
+`--version`, so verbose takes the capital short form rather than breaking an
+existing flag.
+
+Tracing also switches on `stream_options: {"include_usage": true}`, which makes
+the backend emit a final SSE chunk carrying `usage` with an empty `choices`
+array. It is opt-in rather than always-on because not every OpenAI-compatible
+server tolerates the field. The web agent accumulates usage across every round
+it drives, so the summary covers the whole turn.
+
+Trace lines go to stderr while the answer streams to stdout. Since the answer
+carries no trailing newline until it finishes, the command wraps the trace
+writer so a trace line emitted mid-stream is preceded by a newline instead of
+being appended to the answer text.
+
+An assistant turn that yields neither content nor tool calls is an error, not a
+successful empty answer. Returning it as success made the command print nothing
+and exit zero, which looked like a crash. The check must require both to be
+empty: a turn that only requests tools legitimately has no content.
+
 ## Build roadmap
 
 1. Minimal binary: load `.env` (stdlib), read `NVIDIA_API_KEY`, take prompt
@@ -188,6 +263,9 @@ Ship a committed `.env.example` with placeholder values and add `.env` to
 6. Trigger: tmux `display-popup` binding plus the plain command form.
 7. Interactive launcher: Bubble Tea menu, prompt, thread picker, and history
   search while retaining noninteractive argument and pipe workflows.
+8. Settings dialog: in-place `.env` editing with a masked key, plus a model
+  browser backed by the embedded capability catalog and the live model list.
+9. Verbose mode: per-request tracing and token usage on stderr.
 
 ## Environment
 

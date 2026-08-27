@@ -27,6 +27,10 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o linuxai-arm64 ./cmd/linuxai
 
 go test ./...
 gofmt -l .   # must be clean
+
+# Regenerate the embedded model capability catalog (internal/models/profiles.json).
+# Downloads the upstream profiles and prunes them to chat-capable models.
+go run ./internal/models/gen
 ```
 
 ## Backends (both OpenAI-compatible, streaming via SSE)
@@ -72,6 +76,11 @@ gofmt -l .   # must be clean
   `--search <term>`.
 
 ## Hard constraints / gotchas
+
+- `-v` is `--version`. Verbose is `--verbose` / `-V`; never reassign `-v`.
+- Model capabilities are not available from any NVIDIA API. They come from the
+  embedded catalog; `/v1/models` only supplies which IDs the account may call,
+  and it over-reports (unmatched IDs often 404).
 
 - Over plain SSH there is no local clipboard and no graphical screen. Do not
   assume either exists; gate clipboard/screenshot code behind a local check.

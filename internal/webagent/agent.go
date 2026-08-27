@@ -46,6 +46,8 @@ type Runner struct {
 	SearXNGURL string
 	Reader     PageReader
 	Activity   io.Writer
+	// Usage accumulates token counts across every request Run makes.
+	Usage llm.Usage
 }
 
 // Tools returns the native OpenAI-compatible function definitions.
@@ -109,9 +111,13 @@ func (r *Runner) Run(client ChatClient, model string, messages []llm.Message, on
 		if err != nil {
 			return "", err
 		}
+		r.Usage.Add(response.Usage)
 		if len(response.ToolCalls) == 0 {
 			if response.FinishReason == "tool_calls" {
 				return "", fmt.Errorf("backend ended with tool_calls but provided no calls")
+			}
+			if strings.TrimSpace(response.Content) == "" {
+				return "", fmt.Errorf("backend returned an empty answer after %d web tool round(s)", round)
 			}
 			emitFinal(onToken, response.Content)
 			return response.Content, nil
@@ -217,6 +223,7 @@ func (r *Runner) Run(client ChatClient, model string, messages []llm.Message, on
 		if err != nil {
 			return "", err
 		}
+		r.Usage.Add(response.Usage)
 		if strings.TrimSpace(response.Content) != "" {
 			emitFinal(onToken, response.Content)
 			return response.Content, nil

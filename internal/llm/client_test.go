@@ -201,6 +201,7 @@ func TestStreamChatOmitsAuthHeaderWhenKeyEmpty(t *testing.T) {
 		gotAuth, sawAuth = r.Header.Get("Authorization"), r.Header.Get("Authorization") != ""
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"))
 		w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer server.Close()
@@ -296,5 +297,53 @@ func TestStreamChatIgnoresMalformedChunks(t *testing.T) {
 	}
 	if got.String() != "ok" {
 		t.Errorf("streamed text = %q, want %q (malformed/comment lines skipped)", got.String(), "ok")
+	}
+}
+
+// A stream that closes without content or tool calls must not look like a
+// successful empty answer, which would exit silently.
+func TestStreamChatReportsEmptyResponse(t *testing.T) {
+	cases := map[string]string{
+		"immediate done": "data: [DONE]\n\n",
+		"empty delta":    "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+		"closed early":   "",
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(body))
+			}))
+			defer server.Close()
+
+			client := NewClient(server.URL, "key")
+			err := client.StreamChat("m", nil, func(string) {})
+			if err == nil {
+				t.Fatal("expected an error for a stream with no content")
+			}
+			if !strings.Contains(err.Error(), "empty response") {
+				t.Errorf("error = %v, want it to mention an empty response", err)
+			}
+		})
+	}
+}
+
+func TestStreamChatToolsAllowsEmptyContentWithToolCalls(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"web_search\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n"))
+		w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "key")
+	response, err := client.StreamChatTools("m", nil, nil, func(string) {})
+	if err != nil {
+		t.Fatalf("StreamChatTools: %v", err)
+	}
+	if len(response.ToolCalls) != 1 || response.ToolCalls[0].Function.Name != "web_search" {
+		t.Errorf("tool calls = %+v, want one web_search call", response.ToolCalls)
 	}
 }

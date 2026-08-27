@@ -29,6 +29,10 @@ type Client struct {
 	// IdleTimeout bounds the gap between consecutive stream chunks (reset
 	// on every line received). Zero means defaultIdleTimeout.
 	IdleTimeout time.Duration
+	// Trace, when set, receives one line per request and asks the backend
+	// for token usage. Usage is opt-in because not every OpenAI-compatible
+	// server accepts stream_options.
+	Trace io.Writer
 }
 
 // NewClient builds a Client that times out if the server never starts
@@ -92,6 +96,33 @@ type Response struct {
 	Content      string
 	ToolCalls    []ToolCall
 	FinishReason string
+	Usage        Usage
+}
+
+// Usage reports token counts. It is only populated when Client.Trace is set,
+// since that is what enables stream_options.include_usage.
+type Usage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
+// Add accumulates another turn's usage, for multi-request flows such as the
+// web agent.
+func (u *Usage) Add(other Usage) {
+	u.PromptTokens += other.PromptTokens
+	u.CompletionTokens += other.CompletionTokens
+	u.TotalTokens += other.TotalTokens
+}
+
+// Empty reports whether the backend returned no usage at all.
+func (u Usage) Empty() bool {
+	return u.PromptTokens == 0 && u.CompletionTokens == 0 && u.TotalTokens == 0
+}
+
+// String renders the counts for the verbose summary.
+func (u Usage) String() string {
+	return fmt.Sprintf("%d prompt + %d completion = %d total", u.PromptTokens, u.CompletionTokens, u.TotalTokens)
 }
 
 type contentPart struct {
@@ -139,11 +170,16 @@ func (m Message) MarshalJSON() ([]byte, error) {
 }
 
 type chatRequest struct {
-	Model      string    `json:"model"`
-	Stream     bool      `json:"stream"`
-	Messages   []Message `json:"messages"`
-	Tools      []Tool    `json:"tools,omitempty"`
-	ToolChoice string    `json:"tool_choice,omitempty"`
+	Model         string         `json:"model"`
+	Stream        bool           `json:"stream"`
+	Messages      []Message      `json:"messages"`
+	Tools         []Tool         `json:"tools,omitempty"`
+	ToolChoice    string         `json:"tool_choice,omitempty"`
+	StreamOptions *streamOptions `json:"stream_options,omitempty"`
+}
+
+type streamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 type streamChunk struct {
@@ -163,6 +199,7 @@ type streamChunk struct {
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
+	Usage *Usage `json:"usage"`
 }
 
 // StreamChat sends messages to the /chat/completions endpoint and calls
@@ -182,16 +219,22 @@ func (c *Client) StreamChatTools(model string, messages []Message, tools []Tool,
 // StreamChatToolsWithChoice is StreamChatTools with an explicit OpenAI-
 // compatible tool_choice value such as "auto" or "none".
 func (c *Client) StreamChatToolsWithChoice(model string, messages []Message, tools []Tool, toolChoice string, onToken func(string)) (Response, error) {
-	body, err := json.Marshal(chatRequest{
+	requestBody := chatRequest{
 		Model:      model,
 		Stream:     true,
 		Messages:   messages,
 		Tools:      tools,
 		ToolChoice: toolChoice,
-	})
+	}
+	if c.Trace != nil {
+		requestBody.StreamOptions = &streamOptions{IncludeUsage: true}
+	}
+	body, err := json.Marshal(requestBody)
 	if err != nil {
 		return Response{}, fmt.Errorf("marshal request: %w", err)
 	}
+	c.trace("request model=%s messages=%d tools=%d bytes=%d%s", model, len(messages), len(tools), len(body), traceToolChoice(toolChoice))
+	started := time.Now()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -214,7 +257,11 @@ func (c *Client) StreamChatToolsWithChoice(model string, messages []Message, too
 
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return Response{}, fmt.Errorf("backend returned %s: %s", resp.Status, strings.TrimSpace(string(msg)))
+		err := fmt.Errorf("backend returned %s: %s", resp.Status, strings.TrimSpace(string(msg)))
+		if resp.StatusCode == http.StatusNotFound {
+			return Response{}, fmt.Errorf("%w\n\nThe backend does not serve %q for this account. Run 'linuxai --config' to pick another model.", err, model)
+		}
+		return Response{}, err
 	}
 
 	idleTimeout := c.IdleTimeout
@@ -280,6 +327,9 @@ func (c *Client) StreamChatToolsWithChoice(model string, messages []Message, too
 				result.FinishReason = choice.FinishReason
 			}
 		}
+		if chunk.Usage != nil {
+			result.Usage = *chunk.Usage
+		}
 	}
 	if stalled.Load() {
 		return Response{}, fmt.Errorf("stream stalled: no data received for %s", idleTimeout)
@@ -289,5 +339,43 @@ func (c *Client) StreamChatToolsWithChoice(model string, messages []Message, too
 	}
 
 	result.Content = content.String()
+	if result.Content == "" && len(result.ToolCalls) == 0 {
+		reason := result.FinishReason
+		if reason == "" {
+			reason = "none reported"
+		}
+		return Response{}, fmt.Errorf("backend returned an empty response (finish reason: %s)", reason)
+	}
+	c.trace("response in %s finish=%s content=%d chars tool_calls=%d tokens=%s",
+		time.Since(started).Round(time.Millisecond), orNone(result.FinishReason),
+		len(result.Content), len(result.ToolCalls), usageOrUnknown(result.Usage))
 	return result, nil
+}
+
+func (c *Client) trace(format string, args ...any) {
+	if c.Trace == nil {
+		return
+	}
+	fmt.Fprintf(c.Trace, "llm: "+format+"\n", args...)
+}
+
+func traceToolChoice(toolChoice string) string {
+	if toolChoice == "" {
+		return ""
+	}
+	return " tool_choice=" + toolChoice
+}
+
+func orNone(value string) string {
+	if value == "" {
+		return "none"
+	}
+	return value
+}
+
+func usageOrUnknown(usage Usage) string {
+	if usage.Empty() {
+		return "not reported"
+	}
+	return usage.String()
 }

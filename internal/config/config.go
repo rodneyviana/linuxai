@@ -8,8 +8,14 @@ import (
 )
 
 const (
-	defaultBaseURL = "https://integrate.api.nvidia.com/v1"
-	defaultModel   = "openai/gpt-oss-20b"
+	DefaultBaseURL = "https://integrate.api.nvidia.com/v1"
+	DefaultModel   = "openai/gpt-oss-20b"
+
+	// Environment variable names that the settings dialog can edit.
+	KeyAPIKey  = "NVIDIA_API_KEY"
+	KeyBaseURL = "LINUXAI_BASE_URL"
+	KeyModel   = "LINUXAI_MODEL"
+	KeySearXNG = "LINUXAI_SEARXNG_URL"
 
 	DefaultInstructions = "Only answer questions about operating systems, especially Linux if no OS is specified, and programming. Do not be verbose unless required. If a question is outside this scope, do not apologize or give only a generic refusal. Briefly explain that you can help with operating systems, Linux, command-line tools, system administration, software development, debugging, and programming, give one or two relevant examples, and suggest a computing-related way to reframe the question when natural."
 )
@@ -32,14 +38,14 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	cfg := &Config{
-		APIKey:       os.Getenv("NVIDIA_API_KEY"),
-		BaseURL:      getEnvDefault("LINUXAI_BASE_URL", defaultBaseURL),
-		Model:        getEnvDefault("LINUXAI_MODEL", defaultModel),
-		SearXNGURL:   strings.TrimSpace(os.Getenv("LINUXAI_SEARXNG_URL")),
+		APIKey:       os.Getenv(KeyAPIKey),
+		BaseURL:      getEnvDefault(KeyBaseURL, DefaultBaseURL),
+		Model:        getEnvDefault(KeyModel, DefaultModel),
+		SearXNGURL:   strings.TrimSpace(os.Getenv(KeySearXNG)),
 		Instructions: instructions,
 	}
 
-	if cfg.APIKey == "" && cfg.BaseURL == defaultBaseURL {
+	if cfg.APIKey == "" && cfg.BaseURL == DefaultBaseURL {
 		return nil, fmt.Errorf("NVIDIA_API_KEY is not set (set it in the environment or in .env)")
 	}
 
@@ -60,6 +66,24 @@ func InstructionsPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, "instructions.txt"), nil
+}
+
+// EnvPath is the user-level .env the settings dialog reads and writes.
+func EnvPath() (string, error) {
+	dir, err := ConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, ".env"), nil
+}
+
+// ModelsPath is where an updated model catalog is cached.
+func ModelsPath() (string, error) {
+	dir, err := ConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "models.json"), nil
 }
 
 func LoadInstructions() (string, error) {
