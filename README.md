@@ -21,9 +21,14 @@ Ask it something, get a streamed answer in your terminal.
 <p align="center"><em>New-thread prompt with the optional web-search toggle.</em></p>
 
 <p align="center">
-  <img src="linux-ai-dialog-2.jpg" alt="linuxai launcher menu showing the active thread and navigation choices" width="760">
+  <img src="linuxai-dialog-2.jpg" alt="linuxai launcher menu showing the active thread and navigation choices" width="760">
 </p>
-<p align="center"><em>Active-thread menu with continue, new chat, resume, and history search actions.</em></p>
+<p align="center"><em>Active-thread menu with continue, new chat, resume, search history, and settings actions.</em></p>
+
+<p align="center">
+  <img src="linuxai-dialog-3.jpg" alt="linuxai settings menu showing all options" width="760">
+</p>
+<p align="center"><em>Settings dialog with API key, Base Url, Model, SearXNG URL, and System Instructions fields</em></p>
 
 ## Quick start
 
