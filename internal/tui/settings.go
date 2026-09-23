@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -16,7 +17,8 @@ import (
 	"linuxai/internal/models"
 )
 
-// Rows on the settings screen: the four editable values, then the actions.
+// Rows on the settings screen: the four .env values, the system
+// instructions, then the actions.
 const (
 	fieldAPIKey = iota
 	fieldBaseURL
@@ -24,9 +26,19 @@ const (
 	fieldSearXNG
 	fieldCount
 
-	rowSearch = fieldCount
-	rowSave   = fieldCount + 1
-	rowCount  = fieldCount + 2
+	rowInstructions = fieldCount
+	rowSearch       = fieldCount + 1
+	rowSave         = fieldCount + 2
+	rowCount        = fieldCount + 3
+)
+
+// InstructionsCharLimit caps the custom system instructions.
+const InstructionsCharLimit = 8000
+
+const (
+	instructionsMinHeight = 3
+	instructionsMaxHeight = 10
+	instructionsLabel     = "System instructions"
 )
 
 var settingsKeys = [fieldCount]string{
@@ -44,11 +56,12 @@ var settingsLabels = [fieldCount]string{
 }
 
 type settingsState struct {
-	fields [fieldCount]textinput.Model
-	cursor int
-	path   string
-	status string
-	only   bool
+	fields       [fieldCount]textinput.Model
+	instructions textarea.Model
+	cursor       int
+	path         string
+	status       string
+	only         bool
 }
 
 type pickerState struct {
@@ -118,7 +131,36 @@ func newSettingsState() settingsState {
 		}
 		state.fields[index] = input
 	}
+
+	state.instructions = newInstructionsInput()
+	custom, err := config.ReadCustomInstructions()
+	if err != nil {
+		state.status = err.Error()
+	}
+	state.instructions.SetValue(custom)
+	state.instructions.Blur()
 	return state
+}
+
+func newInstructionsInput() textarea.Model {
+	input := textarea.New()
+	input.Placeholder = config.DefaultInstructions
+	input.ShowLineNumbers = false
+	input.CharLimit = InstructionsCharLimit
+	input.SetWidth(52)
+	input.SetHeight(instructionsMinHeight)
+	return input
+}
+
+// resizeInstructions gives the instructions box whatever height the settings
+// screen leaves free, so more of the default text is visible.
+func (m *model) resizeInstructions() {
+	fieldWidth := m.contentWidth() - 6
+	if fieldWidth < 20 {
+		fieldWidth = 20
+	}
+	m.settings.instructions.SetWidth(fieldWidth)
+	m.settings.instructions.SetHeight(clamp(m.height-23, instructionsMinHeight, instructionsMaxHeight))
 }
 
 func newPickerState() pickerState {
@@ -131,12 +173,18 @@ func newPickerState() pickerState {
 
 func (m model) openSettings() (tea.Model, tea.Cmd) {
 	m.settings = newSettingsState()
+	m.resizeInstructions()
 	m.screen = settingsScreen
 	m.settings.fields[m.settings.cursor].Focus()
 	return m, textinput.Blink
 }
 
 func (m model) updateSettings(message tea.Msg, key tea.KeyMsg, isKey bool) (tea.Model, tea.Cmd) {
+	if isKey && m.settings.cursor == rowInstructions && m.instructionsOwnsKey(key) {
+		var cmd tea.Cmd
+		m.settings.instructions, cmd = m.settings.instructions.Update(message)
+		return m, cmd
+	}
 	if isKey {
 		switch key.String() {
 		case "esc":
@@ -170,7 +218,29 @@ func (m model) updateSettings(message tea.Msg, key tea.KeyMsg, isKey bool) (tea.
 		m.settings.fields[m.settings.cursor], cmd = m.settings.fields[m.settings.cursor].Update(message)
 		return m, cmd
 	}
+	if m.settings.cursor == rowInstructions {
+		var cmd tea.Cmd
+		m.settings.instructions, cmd = m.settings.instructions.Update(message)
+		return m, cmd
+	}
 	return m, nil
+}
+
+// instructionsOwnsKey reports whether a key should edit the multi-line
+// instructions rather than move between settings rows. Enter inserts a line
+// break, and the arrows only leave the box from its first or last row.
+func (m model) instructionsOwnsKey(key tea.KeyMsg) bool {
+	input := m.settings.instructions
+	switch key.String() {
+	case "enter":
+		return true
+	case "up":
+		return input.Line() > 0 || input.LineInfo().RowOffset > 0
+	case "down":
+		info := input.LineInfo()
+		return input.Line() < input.LineCount()-1 || info.RowOffset < info.Height-1
+	}
+	return false
 }
 
 func (m model) moveSettingsCursor(delta int) (tea.Model, tea.Cmd) {
@@ -180,6 +250,9 @@ func (m model) moveSettingsCursor(delta int) (tea.Model, tea.Cmd) {
 		m.settings.fields[m.settings.cursor].Focus()
 		return m, textinput.Blink
 	}
+	if m.settings.cursor == rowInstructions {
+		return m, m.settings.instructions.Focus()
+	}
 	return m, nil
 }
 
@@ -187,6 +260,7 @@ func (m *model) blurSettings() {
 	for index := range m.settings.fields {
 		m.settings.fields[index].Blur()
 	}
+	m.settings.instructions.Blur()
 }
 
 func (m model) saveSettings() (tea.Model, tea.Cmd) {
@@ -199,6 +273,10 @@ func (m model) saveSettings() (tea.Model, tea.Cmd) {
 		updates[key] = strings.TrimSpace(m.settings.fields[index].Value())
 	}
 	if err := config.WriteEnvFile(m.settings.path, updates); err != nil {
+		m.settings.status = "Save failed: " + err.Error()
+		return m, nil
+	}
+	if err := config.SaveInstructions(m.settings.instructions.Value()); err != nil {
 		m.settings.status = "Save failed: " + err.Error()
 		return m, nil
 	}
@@ -437,6 +515,8 @@ func (m model) settingsView() string {
 		writeLine(&out, style.Render(marker+label))
 		writeLine(&out, "  "+m.settings.fields[index].View())
 	}
+	writeLine(&out, m.instructionsHeader())
+	writeLine(&out, indentLines(m.settings.instructions.View(), "  "))
 	out.WriteByte('\n')
 	writeLine(&out, actionRow("Search models…", m.settings.cursor == rowSearch))
 	writeLine(&out, actionRow("Save", m.settings.cursor == rowSave))
@@ -554,6 +634,28 @@ func (m model) modelCardView() string {
 	out.WriteByte('\n')
 	out.WriteString(mutedStyle.Render("Enter accept   Esc back to list"))
 	return out.String()
+}
+
+func (m model) instructionsHeader() string {
+	marker := "  "
+	style := mutedStyle
+	if m.settings.cursor == rowInstructions {
+		marker = "› "
+		style = accentStyle
+	}
+	note := "built-in default, type to override"
+	if m.settings.instructions.Length() > 0 {
+		note = "custom, clear to restore default   " + charCount(m.settings.instructions)
+	}
+	return style.Render(marker+instructionsLabel) + "  " + mutedStyle.Render(note)
+}
+
+func indentLines(block, prefix string) string {
+	lines := strings.Split(strings.TrimSuffix(block, "\n"), "\n")
+	for index := range lines {
+		lines[index] = prefix + lines[index]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func actionRow(label string, selected bool) string {

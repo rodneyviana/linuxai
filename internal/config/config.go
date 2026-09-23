@@ -87,6 +87,19 @@ func ModelsPath() (string, error) {
 }
 
 func LoadInstructions() (string, error) {
+	instructions, err := ReadCustomInstructions()
+	if err != nil {
+		return "", err
+	}
+	if instructions == "" {
+		return DefaultInstructions, nil
+	}
+	return instructions, nil
+}
+
+// ReadCustomInstructions returns the trimmed contents of instructions.txt, or
+// "" when the file is missing or blank and the built-in default applies.
+func ReadCustomInstructions() (string, error) {
 	path, err := InstructionsPath()
 	if err != nil {
 		return "", err
@@ -94,15 +107,35 @@ func LoadInstructions() (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return DefaultInstructions, nil
+			return "", nil
 		}
 		return "", fmt.Errorf("reading instructions: %w", err)
 	}
-	instructions := strings.TrimSpace(string(data))
-	if instructions == "" {
-		return DefaultInstructions, nil
+	return strings.TrimSpace(string(data)), nil
+}
+
+// SaveInstructions writes custom instructions to instructions.txt. Blank text
+// removes the file so the built-in default applies again.
+func SaveInstructions(text string) error {
+	path, err := InstructionsPath()
+	if err != nil {
+		return err
 	}
-	return instructions, nil
+	text = strings.TrimSpace(text)
+	if text == "" {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("removing instructions: %w", err)
+		}
+		return nil
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("creating %s: %w", dir, err)
+	}
+	if err := os.WriteFile(path, []byte(text+"\n"), 0o600); err != nil {
+		return fmt.Errorf("writing instructions: %w", err)
+	}
+	return nil
 }
 
 func (c *Config) ValidateWeb() error {

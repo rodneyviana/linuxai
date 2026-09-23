@@ -158,7 +158,8 @@ All configuration is read from environment variables:
 - `LINUXAI_MODEL` — default model string.
 - `LINUXAI_SEARXNG_URL` — SearXNG host for the `--web` tier.
 
-These four are what the settings dialog edits. An optional
+These four are what the settings dialog edits, along with the instructions
+file. An optional
 `~/.config/linuxai/models.json` holds an updated model catalog, and
 `~/.config/linuxai/instructions.txt` overrides the built-in system prompt.
 
@@ -192,8 +193,11 @@ escapes, so the writer must not emit any.
 ## Settings dialog and model catalog
 
 `linuxai --config`, or Settings in the launcher, opens a dialog over the four
-`.env` keys. The API key field is masked while editing. Saving writes the file
-and calls `os.Setenv` so the change applies to the running process.
+`.env` keys plus a multi-line System instructions box. The API key field is
+masked while editing. Saving writes the file and calls `os.Setenv` so the change
+applies to the running process. The instructions box shows the built-in prompt
+as a placeholder while empty; saving it writes `instructions.txt` (`0600`), and
+saving it empty removes the file so the default applies again.
 
 The model field has a browser behind it. Two independent sources feed it:
 
@@ -264,7 +268,8 @@ empty: a turn that only requests tools legitimately has no content.
 7. Interactive launcher: Bubble Tea menu, prompt, thread picker, and history
   search while retaining noninteractive argument and pipe workflows.
 8. Settings dialog: in-place `.env` editing with a masked key, plus a model
-  browser backed by the embedded capability catalog and the live model list.
+  browser backed by the embedded capability catalog and the live model list,
+  and a System instructions editor over `instructions.txt`.
 9. Verbose mode: per-request tracing and token usage on stderr.
 
 ## Environment

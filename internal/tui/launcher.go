@@ -22,6 +22,14 @@ type Result struct {
 	Canceled bool
 }
 
+// PromptCharLimit caps how much text the Ask box accepts.
+const PromptCharLimit = 4000
+
+const (
+	promptMinHeight = 5
+	promptMaxHeight = 12
+)
+
 type screen int
 
 const (
@@ -84,8 +92,9 @@ func newModel(store *history.Store, currentID string, fresh, web, webAvailable b
 	prompt := textarea.New()
 	prompt.Placeholder = "Ask a Linux or programming question"
 	prompt.ShowLineNumbers = false
+	prompt.CharLimit = PromptCharLimit
 	prompt.SetWidth(66)
-	prompt.SetHeight(5)
+	prompt.SetHeight(promptMinHeight)
 
 	search := textinput.New()
 	search.Placeholder = "Search saved conversations"
@@ -348,6 +357,7 @@ func (m *model) resizeInputs() {
 		width = 24
 	}
 	m.prompt.SetWidth(width)
+	m.prompt.SetHeight(clamp(m.height-10, promptMinHeight, promptMaxHeight))
 	m.search.Width = width
 	// Settings rows are indented two columns and each input renders a
 	// two-column prompt, so they get less room than the plain inputs.
@@ -359,6 +369,7 @@ func (m *model) resizeInputs() {
 	for index := range m.settings.fields {
 		m.settings.fields[index].Width = fieldWidth
 	}
+	m.resizeInstructions()
 }
 
 func (m model) View() string {
@@ -423,8 +434,14 @@ func (m model) promptView() string {
 	}
 	help := strings.Join(filterNonEmpty([]string{"Ctrl+S send", "Ctrl+N new chat", webHelp, "Esc menu"}), "   ")
 	return titleStyle.Render("linuxai · "+title) + "\n\n" +
-		accentStyle.Render("Ask") + "\n" + m.prompt.View() + "\n" +
+		accentStyle.Render("Ask") + "  " + mutedStyle.Render(charCount(m.prompt)) + "\n" +
+		m.prompt.View() + "\n" +
 		web + "\n\n" + mutedStyle.Render(help)
+}
+
+// charCount reports how much of the textarea's character budget is used.
+func charCount(input textarea.Model) string {
+	return fmt.Sprintf("%d/%d", input.Length(), input.CharLimit)
 }
 
 func (m model) threadsView() string {
@@ -568,6 +585,16 @@ func truncate(value string, width int) string {
 		return string(runes[:width])
 	}
 	return string(runes[:width-3]) + "..."
+}
+
+func clamp(value, low, high int) int {
+	if value < low {
+		return low
+	}
+	if value > high {
+		return high
+	}
+	return value
 }
 
 func writeLine(out *strings.Builder, value string) {

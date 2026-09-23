@@ -141,3 +141,35 @@ func TestValidateWeb(t *testing.T) {
 		t.Errorf("configured ValidateWeb: %v", err)
 	}
 }
+
+func TestSaveInstructionsRoundTripsAndClears(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	if err := SaveInstructions("  Answer tersely.\nPrefer POSIX sh.  "); err != nil {
+		t.Fatalf("SaveInstructions: %v", err)
+	}
+	got, err := ReadCustomInstructions()
+	if err != nil {
+		t.Fatalf("ReadCustomInstructions: %v", err)
+	}
+	if got != "Answer tersely.\nPrefer POSIX sh." {
+		t.Errorf("custom instructions = %q", got)
+	}
+	path, _ := InstructionsPath()
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+		t.Errorf("instructions file mode = %v, err %v", info, err)
+	}
+
+	if err := SaveInstructions("   "); err != nil {
+		t.Fatalf("SaveInstructions blank: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("blank save should remove the file, stat err = %v", err)
+	}
+	if got, _ := LoadInstructions(); got != DefaultInstructions {
+		t.Errorf("after clearing, instructions = %q, want default", got)
+	}
+	if err := SaveInstructions(""); err != nil {
+		t.Errorf("clearing twice should not fail: %v", err)
+	}
+}

@@ -197,3 +197,59 @@ func TestFormatTokens(t *testing.T) {
 		}
 	}
 }
+
+func TestSettingsInstructionsShowDefaultAndSave(t *testing.T) {
+	m := newSettingsModel(t)
+	if m.settings.instructions.Value() != "" {
+		t.Fatalf("instructions should start empty, got %q", m.settings.instructions.Value())
+	}
+	if m.settings.instructions.Placeholder != config.DefaultInstructions {
+		t.Error("the default instructions should be the placeholder")
+	}
+	if view := m.settingsView(); !strings.Contains(view, "built-in default") || !strings.Contains(view, "Only answer questions") {
+		t.Errorf("settings view does not show the default instructions:\n%s", view)
+	}
+
+	var current tea.Model = m
+	for step := 0; step < rowInstructions; step++ {
+		current, _ = current.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	got := current.(model)
+	if got.settings.cursor != rowInstructions || !got.settings.instructions.Focused() {
+		t.Fatalf("cursor = %d focused = %v, want instructions focused", got.settings.cursor, got.settings.instructions.Focused())
+	}
+
+	current, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("Be brief.")})
+	current, _ = current.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	current, _ = current.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("Use bash.")})
+	got = current.(model)
+	if got.settings.cursor != rowInstructions {
+		t.Fatalf("Enter should add a line, cursor moved to %d", got.settings.cursor)
+	}
+	if value := got.settings.instructions.Value(); value != "Be brief.\nUse bash." {
+		t.Fatalf("instructions = %q", value)
+	}
+
+	up, _ := got.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if got := up.(model); got.settings.cursor != rowInstructions {
+		t.Errorf("Up from the second line should stay in the box, cursor = %d", got.settings.cursor)
+	}
+	down, _ := got.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if got := down.(model); got.settings.cursor != rowSearch {
+		t.Errorf("Down from the last line should leave the box, cursor = %d", got.settings.cursor)
+	}
+
+	saved, _ := got.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if status := saved.(model).settings.status; !strings.HasPrefix(status, "Saved to ") {
+		t.Fatalf("status = %q", status)
+	}
+	instructions, err := config.LoadInstructions()
+	if err != nil || instructions != "Be brief.\nUse bash." {
+		t.Errorf("LoadInstructions = %q, %v", instructions, err)
+	}
+
+	reopened, _ := saved.(model).openSettings()
+	if value := reopened.(model).settings.instructions.Value(); value != "Be brief.\nUse bash." {
+		t.Errorf("reopened instructions = %q", value)
+	}
+}

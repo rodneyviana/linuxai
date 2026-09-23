@@ -106,3 +106,20 @@ func TestNewChatMenuItemCreatesThreadAndOpensPrompt(t *testing.T) {
 		t.Errorf("new thread %q does not exist", got.currentID)
 	}
 }
+
+func TestPromptAcceptsUpToTheCharLimit(t *testing.T) {
+	store := newTestStore(t)
+	m, err := newModel(store, "", true, false, false)
+	if err != nil {
+		t.Fatalf("newModel: %v", err)
+	}
+	long := strings.Repeat("a", PromptCharLimit+50)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(long), Paste: true})
+	got := updated.(model)
+	if length := len(got.prompt.Value()); length != PromptCharLimit {
+		t.Errorf("prompt length = %d, want %d", length, PromptCharLimit)
+	}
+	if view := got.promptView(); !strings.Contains(view, "4000/4000") {
+		t.Errorf("prompt view lacks the character counter:\n%s", view)
+	}
+}

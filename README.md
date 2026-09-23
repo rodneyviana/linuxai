@@ -93,7 +93,8 @@ cp .env.example .env      # or edit ~/.config/linuxai/.env
 You can also edit these values from the built-in settings dialog, either with
 `linuxai --config` or from **Settings** in the launcher menu. It writes
 `~/.config/linuxai/.env` in place, preserving your comments, and masks the API
-key while you type.
+key while you type. The same dialog edits the system instructions described
+below.
 
 | Variable | Purpose |
 |---|---|
@@ -140,6 +141,12 @@ custom assistant instructions in `instructions.txt` there, next to the user
 ~/.config/linuxai/instructions.txt
 ```
 
+The **System instructions** box in the settings dialog edits this file. While it
+is empty the box shows the built-in default in dimmed text; saving it empty
+removes `instructions.txt` so the default applies. `Enter` adds a line break
+there, and `Tab` or the arrow keys at the first or last line move to the next
+setting.
+
 If that file is missing or blank, linuxai uses this built-in instruction:
 
 ```text
@@ -170,6 +177,7 @@ thread opens the prompt directly. From there you can start a new chat, resume or
 search history, and toggle web search. The launcher closes before the answer
 streams, so the response stays normal selectable terminal output.
 
+The Ask box accepts up to 4,000 characters and shows a running count.
 Prompt keys: `Ctrl+S` to send, `Ctrl+N` for a new chat, `Ctrl+W` to toggle web
 search, and `Esc` to return to the menu. Argument prompts and piped input never
 open the launcher.
@@ -376,16 +384,16 @@ No network or live API key is required.
 ### Versioning and releases
 
 `linuxai --version` prints the build's version, derived from
-`git describe --tags --always --dirty` at build time (e.g. `v0.4.0`,
-`v0.4.0-3-gabc1234` for commits since the last tag, or a bare commit hash like
+`git describe --tags --always --dirty` at build time (e.g. `v0.6.0`,
+`v0.6.0-3-gabc1234` for commits since the last tag, or a bare commit hash like
 `07fe69e` before any tag exists). A plain `go build` with no `-ldflags` reports
 `dev`.
 
 To cut a release, tag it and repackage:
 
 ```bash
-git tag v0.4.0
-git push origin v0.4.0
+git tag v0.6.0
+git push origin v0.6.0
 ./scripts/package.sh                # writes ./linuxai-installer-<version>.run
 ```
 
@@ -398,7 +406,9 @@ a single self-extracting installer named after that version.
 
 **Implemented:** `.env` loading, config from environment, streaming chat
 against the NVIDIA/Ollama backend, live Markdown-to-ANSI terminal rendering with
-Unicode LaTeX math, configurable system instructions, the interactive launcher,
+Unicode LaTeX math, configurable system instructions, the interactive launcher
+(4,000-character Ask box), the settings dialog with its model browser and
+System instructions editor, `-V`/`--verbose` tracing,
 JSONL history with `--new`/`--list`/`--resume`/`--search`, manual image attach
 (`--image`/`--clipboard`) with stdlib-only downscaling, and bounded `--web`
 search/read tools with per-origin consent.
